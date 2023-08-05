@@ -1,0 +1,31 @@
+[package]
+name = "isoquill"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+winit = {git = "https://github.com/rust-windowing/winit.git", version = "0.27"}
+env_logger = "0.10"
+log = "0.4"
+wgpu = {version = "0.16", features = ["vulkan-portability"]}
+wgpu_glyph = "0.20"
+raw-window-handle = "0.5"
+pollster = "0.3"
+bytemuck = { version = "1.12.1", features = [ "derive", "min_const_generics" ] }
+bitflags = "2.3.3"
+fast-srgb8 = "1.0"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = "0.48"
+libloading = "0.8.0"
+
+
+# Enable a small amount of optimization in debug mode
+[profile.dev]
+opt-level = 1
+
+# Enable high optimizations for dependencies (incl. Bevy), but not for our code:
+[profile.dev.package."*"]
+opt-level = 3
