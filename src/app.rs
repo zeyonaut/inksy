@@ -20,25 +20,28 @@ pub struct App {
 	renderer: Renderer,
 	cursor_x: f64,
 	cursor_y: f64,
+	position: [f32; 2],
 	is_cursor_relevant: bool,
 	is_cursor_pressed: bool,
 	tablet_context: Option<TabletContext>,
 	pressure: Option<f64>,
 	strokes: Vec<Stroke>,
 	is_mid_stroke: bool,
+	pan_origin: Option<Option<(f64, f64, [f32; 2])>>,
 }
 
 impl App {
 	// Sets up the logger and renderer.
 	pub fn new(event_loop: &EventLoop<()>) -> Self {
-		let window = WindowBuilder::new().with_title("Monoscribe").build(event_loop).unwrap();
+		let window = WindowBuilder::new().with_title("Inskriva").build(event_loop).unwrap();
 
 		// Attempt to establish a tablet context.
 		let tablet_context = TabletContext::new(&window);
 
 		// Set up the renderer.
+		let position = [0.; 2];
 		let size = window.inner_size();
-		let renderer = Renderer::new(&window, size.width, size.height);
+		let renderer = Renderer::new(&window, position, size.width, size.height);
 
 		// Return a new instance of the app state.
 		Self {
@@ -48,12 +51,14 @@ impl App {
 			renderer,
 			cursor_x: 0.,
 			cursor_y: 0.,
+			position,
 			is_cursor_relevant: false,
 			is_cursor_pressed: false,
 			tablet_context,
 			pressure: None,
 			strokes: Vec::new(),
 			is_mid_stroke: false,
+			pan_origin: None,
 		}
 	}
 
@@ -94,6 +99,26 @@ impl App {
 						..
 					} => {
 						self.strokes.pop();
+					},
+					WindowEvent::KeyboardInput {
+						input: KeyboardInput {
+							state,
+							virtual_keycode: Some(VirtualKeyCode::Space),
+							..
+						},
+						..
+					} => match state {
+						ElementState::Pressed => {
+							if self.pan_origin.is_none() {
+								self.window.set_cursor_icon(winit::window::CursorIcon::Grab);
+								self.is_mid_stroke = false;
+								self.pan_origin = Some(None);
+							}
+						},
+						ElementState::Released => {
+							self.window.set_cursor_icon(winit::window::CursorIcon::Arrow);
+							self.pan_origin = None;
+						},
 					},
 					WindowEvent::KeyboardInput {
 						input: KeyboardInput {
@@ -193,7 +218,7 @@ impl App {
 	}
 
 	fn update_renderer(&mut self) {
-		self.renderer.clear_color = if self.is_cursor_relevant {
+		self.renderer.clear_color = wgpu::Color::BLACK /*if self.is_cursor_relevant {
 			wgpu::Color {
 				r: self.cursor_x / f64::from(self.renderer.width),
 				g: self.cursor_y / f64::from(self.renderer.height),
@@ -202,19 +227,38 @@ impl App {
 			}
 		} else {
 			wgpu::Color::BLACK
-		};
+		}*/;
 
-		if self.is_cursor_pressed {
+		if let Some(pan_origin) = self.pan_origin.as_mut() {
+			if self.is_cursor_pressed {
+				if pan_origin.is_none() {
+					self.window.set_cursor_icon(winit::window::CursorIcon::Grabbing);
+					*pan_origin = Some((self.cursor_x, self.cursor_y, self.position));
+				}
+			} else {
+				if pan_origin.is_some() {
+					self.window.set_cursor_icon(winit::window::CursorIcon::Grab);
+					*pan_origin = None;
+				}
+			}
+		}
+
+		if self.is_cursor_pressed && self.pan_origin.is_none() {
 			if !self.is_mid_stroke {
 				self.strokes.push(Stroke::new());
 				self.is_mid_stroke = true;
 			}
 
 			if let Some(current_stroke) = self.strokes.last_mut() {
-				current_stroke.add_point(self.cursor_x as f32, self.cursor_y as f32, self.pressure.map_or(1., |pressure| (pressure / 32767.) as f32))
+				current_stroke.add_point(self.position[0] + self.cursor_x as f32, self.position[1] + self.cursor_y as f32, self.pressure.map_or(1., |pressure| (pressure / 32767.) as f32))
 			}
 		} else {
 			self.is_mid_stroke = false;
+		}
+
+		if let Some(Some((origin_cursor_x, origin_cursor_y, origin_position))) = self.pan_origin {
+			self.position = [origin_position[0] - (self.cursor_x - origin_cursor_x) as f32, origin_position[1] - (self.cursor_y - origin_cursor_y) as f32];
+			self.renderer.reposition(self.position);
 		}
 
 		// Apply a resize if necessary; resizes are time-intensive.

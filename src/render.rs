@@ -42,37 +42,12 @@ impl Vertex {
 	}
 }
 
-// TODO: this is temporary, remove later.
-const VERTICES: &[Vertex] = &[
-	Vertex {
-		position: [(-0.0868241 + 1.) * 400., (0.49240386 + 1.) * 300., 0.0],
-		color: [0.0, 0.0, 0.0, 0.5],
-	},
-	Vertex {
-		position: [(-0.49513406 + 1.) * 400., (0.06958647 + 1.) * 300., 0.0],
-		color: [0.0, 1.0, 0.0, 0.5],
-	},
-	Vertex {
-		position: [(-0.21918549 + 1.) * 400., (-0.44939706 + 1.) * 300., 0.0],
-		color: [0.0, 1.0, 1.0, 0.5],
-	},
-	Vertex {
-		position: [(0.35966998 + 1.) * 400., (-0.3473291 + 1.) * 300., 0.0],
-		color: [1.0, 0.0, 1.0, 1.0],
-	},
-	Vertex {
-		position: [(0.44147372 + 1.) * 400., (0.2347359 + 1.) * 300., 0.0],
-		color: [1.0, 0.0, 0.0, 1.0],
-	},
-];
-
-const INDICES: &[u16] = &[0, 1, 4, 1, 2, 4, 2, 3, 4];
-
 const RECT_INDICES: &[u16] = &[0, 1, 2, 0, 2, 3];
 
 #[repr(C)]
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 struct ViewportUniform {
+	pub position: [f32; 2],
 	pub size: [f32; 2],
 }
 
@@ -132,6 +107,7 @@ pub struct Renderer {
 	//staging_belt: wgpu::util::StagingBelt,
 	pub width: u32,
 	pub height: u32,
+	pub position: [f32; 2],
 	pub is_pending_resize: bool,
 	pub clear_color: wgpu::Color,
 	render_pipeline: wgpu::RenderPipeline,
@@ -152,7 +128,7 @@ pub struct Renderer {
 
 impl Renderer {
 	// Create an instance of the renderer.
-	pub fn new<W>(window: &W, width: u32, height: u32) -> Self
+	pub fn new<W>(window: &W, position: [f32; 2], width: u32, height: u32) -> Self
 	where
 		W: HasRawWindowHandle + HasRawDisplayHandle,
 	{
@@ -321,7 +297,10 @@ impl Renderer {
 
 		let viewport_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
 			label: Some("viewport_buffer"),
-			contents: bytemuck::cast_slice(&[ViewportUniform { size: [width as f32, height as f32] }]),
+			contents: bytemuck::cast_slice(&[ViewportUniform {
+				position: [0., 0.],
+				size: [width as f32, height as f32],
+			}]),
 			usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
 		});
 
@@ -334,7 +313,7 @@ impl Renderer {
 			label: Some("viewport_bind_group"),
 		});
 
-		let strokes_vertex_buffer_size = (std::mem::size_of::<Vertex>() as u64 * (1_000 * 1_000)).next_power_of_two();
+		let strokes_vertex_buffer_size = (std::mem::size_of::<Vertex>() as u64 * (1 << 16)).next_power_of_two();
 
 		let strokes_vertex_buffer = device.create_buffer(&wgpu::BufferDescriptor {
 			label: Some("strokes_vertex_buffer"),
@@ -343,7 +322,7 @@ impl Renderer {
 			mapped_at_creation: false,
 		});
 
-		let strokes_index_buffer_size = (std::mem::size_of::<u16>() as u64 * (1_000 * 1_000)).next_power_of_two();
+		let strokes_index_buffer_size = (std::mem::size_of::<u16>() as u64 * (1 << 16)).next_power_of_two();
 
 		let strokes_index_buffer = device.create_buffer(&wgpu::BufferDescriptor {
 			label: Some("strokes_index_buffer"),
@@ -367,6 +346,7 @@ impl Renderer {
 			//staging_belt,
 			width,
 			height,
+			position,
 			is_pending_resize: false,
 			clear_color: wgpu::Color { r: 0., g: 0., b: 0., a: 1.0 },
 			render_pipeline,
@@ -394,12 +374,26 @@ impl Renderer {
 		}
 	}
 
+	pub fn reposition(&mut self, position: [f32; 2]) {
+		if self.position != position {
+			self.position = position;
+			self.is_pending_resize = true;
+		}
+	}
+
 	pub fn update(&mut self) {}
 
 	pub fn render(&mut self, card_instances: &[CardInstance], strokes: &[Stroke]) -> Result<(), wgpu::SurfaceError> {
 		if self.is_pending_resize {
 			// We write the new size to the viewport buffer.
-			self.queue.write_buffer(&self.viewport_buffer, 0, bytemuck::cast_slice(&[ViewportUniform { size: [self.width as f32, self.height as f32] }]));
+			self.queue.write_buffer(
+				&self.viewport_buffer,
+				0,
+				bytemuck::cast_slice(&[ViewportUniform {
+					position: self.position,
+					size: [self.width as f32, self.height as f32],
+				}]),
+			);
 			self.is_pending_resize = false;
 		}
 
@@ -431,7 +425,7 @@ impl Renderer {
 
 		if self.strokes_vertex_buffer_size < (std::mem::size_of::<Vertex>() * strokes_vertices.len()) as u64 {
 			println!("reallocating vertex buffer");
-			self.strokes_vertex_buffer_size = (std::mem::size_of::<Vertex>() * strokes_vertices.len()) as u64;
+			self.strokes_vertex_buffer_size = (std::mem::size_of::<Vertex>() * strokes_vertices.len()).next_power_of_two() as u64;
 			self.strokes_vertex_buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
 				label: Some("strokes_vertex_buffer"),
 				size: self.strokes_vertex_buffer_size,
@@ -440,9 +434,9 @@ impl Renderer {
 			});
 		}
 
-		if self.strokes_index_buffer_size < (std::mem::size_of::<u16>() * strokes_vertices.len()) as u64 {
+		if self.strokes_index_buffer_size < (std::mem::size_of::<u16>() * strokes_indices.len()) as u64 {
 			println!("reallocating index buffer");
-			self.strokes_index_buffer_size = (std::mem::size_of::<u16>() * strokes_vertices.len()) as u64;
+			self.strokes_index_buffer_size = (std::mem::size_of::<u16>() * strokes_indices.len()).next_power_of_two() as u64;
 			self.strokes_index_buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
 				label: Some("strokes_index_buffer"),
 				size: self.strokes_index_buffer_size,

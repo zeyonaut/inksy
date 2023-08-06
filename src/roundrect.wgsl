@@ -1,4 +1,5 @@
 struct ViewportUniform {
+	position: vec2<f32>,
 	size: vec2<f32>,
 }
 
@@ -31,7 +32,7 @@ var<private> vertices: array<vec2<f32>, 4> = array<vec2<f32>, 4>(
 @vertex
 fn vs_main(shape: VertexInput, @builtin(vertex_index) index: u32, @builtin(instance_index) instance_index: u32) -> VertexOutput {
 	var out: VertexOutput;
-	out.position = vec4<f32>((vertices[index] * shape.dimensions + shape.position) / viewport.size * vec2<f32>(2.0, -2.0) + vec2<f32>(-1.0, 1.0) , shape.depth, 1.0);
+	out.position = vec4<f32>((vertices[index] * shape.dimensions + shape.position - viewport.position) / viewport.size * vec2<f32>(2.0, -2.0) + vec2<f32>(-1.0, 1.0) , shape.depth, 1.0);
 	out.sposition = shape.position;
 	out.dimensions = shape.dimensions;
 	out.color = shape.color;
