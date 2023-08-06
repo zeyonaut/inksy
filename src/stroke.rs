@@ -1,3 +1,4 @@
+use fast_srgb8::srgb8_to_f32;
 use vek::Vec2;
 
 use crate::render::Vertex;
@@ -59,7 +60,7 @@ impl Stroke {
 			.into_iter()
 			.map(|position| Vertex {
 				position: [position.x, position.y, 0.],
-				color: [1.; 4],
+				color: [0xfb, 0xfb, 0xff, 0xff].map(srgb8_to_f32),
 			})
 			.collect();
 		(vertices, indices)

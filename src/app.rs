@@ -1,4 +1,8 @@
+use std::time::{Duration, Instant};
+
 use fast_srgb8::srgb8_to_f32;
+use vek::Vec2;
+use winit::dpi::{PhysicalPosition, PhysicalSize};
 #[cfg(target_os = "windows")]
 use winit::{
 	event::*,
@@ -11,6 +15,58 @@ use crate::{
 	stroke::Stroke,
 	wintab::*,
 };
+
+struct PanOrigin {
+	cursor: Vec2<f64>,
+	position: Vec2<f32>,
+}
+
+enum Mode {
+	Drawing { is_mid_stroke: bool },
+	Selecting { origin: Option<Vec2<f32>> },
+	Panning { origin: Option<PanOrigin> },
+}
+
+struct ModeStack {
+	base_mode: Mode,
+	transient_mode: Option<Mode>,
+}
+
+impl ModeStack {
+	pub fn new(mode: Mode) -> Self {
+		Self { base_mode: mode, transient_mode: None }
+	}
+
+	pub fn get(&self) -> &Mode {
+		self.transient_mode.as_ref().unwrap_or(&self.base_mode)
+	}
+
+	pub fn get_mut(&mut self) -> &mut Mode {
+		self.transient_mode.as_mut().unwrap_or(&mut self.base_mode)
+	}
+
+	pub fn temp_pan(&mut self, should_pan: bool) {
+		if should_pan {
+			if !matches!(self.transient_mode, Some(Mode::Panning { .. })) {
+				self.transient_mode = Some(Mode::Panning { origin: None });
+			}
+		} else {
+			self.transient_mode = None;
+		}
+	}
+
+	pub fn switch_select(&mut self) {
+		if !matches!(self.base_mode, Mode::Selecting { .. }) {
+			self.base_mode = Mode::Selecting { origin: None }
+		}
+	}
+
+	pub fn switch_draw(&mut self) {
+		if !matches!(self.base_mode, Mode::Drawing { .. }) {
+			self.base_mode = Mode::Drawing { is_mid_stroke: false }
+		}
+	}
+}
 
 // Current state of our app.
 pub struct App {
@@ -26,14 +82,19 @@ pub struct App {
 	tablet_context: Option<TabletContext>,
 	pressure: Option<f64>,
 	strokes: Vec<Stroke>,
-	is_mid_stroke: bool,
-	pan_origin: Option<Option<(f64, f64, [f32; 2])>>,
+	mode_stack: ModeStack,
+	last_frame_instant: std::time::Instant,
 }
 
 impl App {
 	// Sets up the logger and renderer.
 	pub fn new(event_loop: &EventLoop<()>) -> Self {
-		let window = WindowBuilder::new().with_title("Inskriva").build(event_loop).unwrap();
+		let window = WindowBuilder::new().with_title("Inskriva").with_visible(false).build(event_loop).unwrap();
+
+		// Resize the window to a reasonable size.
+		let monitor_size = window.current_monitor().unwrap().size();
+		window.set_inner_size(PhysicalSize::new(monitor_size.width as f64 / 1.5, monitor_size.height as f64 / 1.5));
+		window.set_outer_position(PhysicalPosition::new(monitor_size.width as f64 / 6., monitor_size.height as f64 / 6.));
 
 		// Attempt to establish a tablet context.
 		let tablet_context = TabletContext::new(&window);
@@ -41,7 +102,19 @@ impl App {
 		// Set up the renderer.
 		let position = [0.; 2];
 		let size = window.inner_size();
-		let renderer = Renderer::new(&window, position, size.width, size.height);
+		let mut renderer = Renderer::new(&window, position, size.width, size.height);
+
+		// Make the window visible and immediately clear color to prevent a flash.
+		renderer.clear_color = wgpu::Color {
+			r: srgb8_to_f32(0x04) as f64,
+			g: srgb8_to_f32(0x0f) as f64,
+			b: srgb8_to_f32(0x16) as f64,
+			a: srgb8_to_f32(0xff) as f64,
+		};
+		let output = renderer.clear().unwrap();
+		window.set_visible(true);
+		// FIXME: This sometimes flashes, and sometimes doesn't.
+		output.present();
 
 		// Return a new instance of the app state.
 		Self {
@@ -57,8 +130,8 @@ impl App {
 			tablet_context,
 			pressure: None,
 			strokes: Vec::new(),
-			is_mid_stroke: false,
-			pan_origin: None,
+			mode_stack: ModeStack::new(Mode::Drawing { is_mid_stroke: false }),
+			last_frame_instant: Instant::now() - Duration::new(1, 0),
 		}
 	}
 
@@ -77,7 +150,7 @@ impl App {
 			},
 			// Check if a window event has occurred.
 			Event::WindowEvent { ref event, window_id } if window_id == self.window.id() => {
-				// FIXME: This is a little wasteful. Blender, for example, only updates if something actually does change on-screen.
+				// FIXME: This is a little wasteful. Is it feasible to only update if something actually does change on-screen?
 				self.should_redraw = true;
 				match event {
 					// If the titlebar close button is clicked  or the escape key is pressed, exit the loop.
@@ -102,6 +175,26 @@ impl App {
 					},
 					WindowEvent::KeyboardInput {
 						input: KeyboardInput {
+							state: ElementState::Pressed,
+							virtual_keycode: Some(VirtualKeyCode::S),
+							..
+						},
+						..
+					} => {
+						self.mode_stack.switch_select();
+					},
+					WindowEvent::KeyboardInput {
+						input: KeyboardInput {
+							state: ElementState::Pressed,
+							virtual_keycode: Some(VirtualKeyCode::B),
+							..
+						},
+						..
+					} => {
+						self.mode_stack.switch_draw();
+					},
+					WindowEvent::KeyboardInput {
+						input: KeyboardInput {
 							state,
 							virtual_keycode: Some(VirtualKeyCode::Space),
 							..
@@ -109,15 +202,12 @@ impl App {
 						..
 					} => match state {
 						ElementState::Pressed => {
-							if self.pan_origin.is_none() {
-								self.window.set_cursor_icon(winit::window::CursorIcon::Grab);
-								self.is_mid_stroke = false;
-								self.pan_origin = Some(None);
+							if self.mode_stack.transient_mode.is_none() {
+								self.mode_stack.temp_pan(true);
 							}
 						},
 						ElementState::Released => {
-							self.window.set_cursor_icon(winit::window::CursorIcon::Arrow);
-							self.pan_origin = None;
+							self.mode_stack.temp_pan(false);
 						},
 					},
 					WindowEvent::KeyboardInput {
@@ -129,7 +219,6 @@ impl App {
 						..
 					} => self.strokes.clear(),
 
-					// Experiment with capturing cursor movements (currently changing clear color.)
 					WindowEvent::CursorMoved { position, .. } => {
 						self.cursor_x = position.x;
 						self.cursor_y = position.y;
@@ -170,28 +259,17 @@ impl App {
 			// If a window redraw is requested, have the renderer update and render.
 			Event::RedrawRequested(window_id) if window_id == self.window.id() => {
 				self.update_renderer();
-				/*let card_instances = vec![
-					CardInstance {
-						position: [10., 10.],
-						dimensions: [202., 102.],
-						color: [srgb8_to_f32(0x2a), srgb8_to_f32(0xda), srgb8_to_f32(0xfa), 1.],
-						depth: 0.,
-						radius: 5.,
-					},
-					CardInstance {
-						position: [11.0, 11.0],
-						dimensions: [200.0, 100.0],
-						color: [srgb8_to_f32(0x1e), srgb8_to_f32(0x1e), srgb8_to_f32(0x1e), 1.],
-						depth: 0.,
-						radius: 4.,
-					},
-				];
-				*/
-				match self.renderer.render(&vec![], &self.strokes) {
-					Ok(_) => {},
-					Err(wgpu::SurfaceError::Lost) => self.renderer.resize(self.renderer.width, self.renderer.height),
-					Err(wgpu::SurfaceError::OutOfMemory) => *control_flow = ControlFlow::Exit,
-					Err(e) => eprintln!("{:?}", e),
+
+				// Only render if it's been too long since the last render.
+				if (Instant::now() - self.last_frame_instant) >= Duration::new(1, 0) / 90 {
+					self.last_frame_instant = Instant::now();
+
+					match self.repaint() {
+						Ok(_) => {},
+						Err(wgpu::SurfaceError::Lost) => self.renderer.resize(self.renderer.width, self.renderer.height),
+						Err(wgpu::SurfaceError::OutOfMemory) => *control_flow = ControlFlow::Exit,
+						Err(e) => eprintln!("{:?}", e),
+					}
 				}
 			},
 
@@ -203,6 +281,24 @@ impl App {
 			// Ignore all other events.
 			_ => {},
 		}
+	}
+
+	fn repaint(&mut self) -> Result<(), wgpu::SurfaceError> {
+		// FIXME: Check if selecting in transient mode first.
+		let card_instances = if let Mode::Selecting { origin: Some(origin) } = &self.mode_stack.base_mode {
+			let current = Vec2::<f32>::from(self.position) + Vec2::new(self.cursor_x, self.cursor_y).as_::<f32>();
+			vec![CardInstance {
+				position: [current.x.min(origin.x), current.y.min(origin.y)],
+				dimensions: [(current.x - origin.x).abs(), (current.y - origin.y).abs()],
+				color: [0x22, 0xae, 0xd1, 0x33].map(srgb8_to_f32),
+				depth: 0.,
+				radius: 0.,
+			}]
+		} else {
+			vec![]
+		};
+
+		self.renderer.render(&card_instances, &self.strokes)
 	}
 
 	fn poll_tablet(&mut self) {
@@ -218,7 +314,7 @@ impl App {
 	}
 
 	fn update_renderer(&mut self) {
-		self.renderer.clear_color = wgpu::Color::BLACK /*if self.is_cursor_relevant {
+		/*if self.is_cursor_relevant {
 			wgpu::Color {
 				r: self.cursor_x / f64::from(self.renderer.width),
 				g: self.cursor_y / f64::from(self.renderer.height),
@@ -227,38 +323,58 @@ impl App {
 			}
 		} else {
 			wgpu::Color::BLACK
-		}*/;
+		}*/
 
-		if let Some(pan_origin) = self.pan_origin.as_mut() {
-			if self.is_cursor_pressed {
-				if pan_origin.is_none() {
+		match self.mode_stack.get_mut() {
+			Mode::Drawing { is_mid_stroke } => {
+				self.window.set_cursor_icon(winit::window::CursorIcon::Arrow);
+				if self.is_cursor_pressed {
+					if !*is_mid_stroke {
+						self.strokes.push(Stroke::new());
+						*is_mid_stroke = true;
+					}
+
+					if let Some(current_stroke) = self.strokes.last_mut() {
+						current_stroke.add_point(self.position[0] + self.cursor_x as f32, self.position[1] + self.cursor_y as f32, self.pressure.map_or(1., |pressure| (pressure / 32767.) as f32))
+					}
+				} else {
+					*is_mid_stroke = false;
+				}
+			},
+			Mode::Selecting { origin } => {
+				self.window.set_cursor_icon(winit::window::CursorIcon::Crosshair);
+
+				if self.is_cursor_pressed {
+					if origin.is_none() {
+						*origin = Some(Vec2::from(self.position) + Vec2::new(self.cursor_x, self.cursor_y).as_::<f32>());
+					}
+				} else {
+					if origin.is_some() {
+						*origin = None;
+					}
+				}
+			},
+			Mode::Panning { origin } => {
+				if self.is_cursor_pressed {
 					self.window.set_cursor_icon(winit::window::CursorIcon::Grabbing);
-					*pan_origin = Some((self.cursor_x, self.cursor_y, self.position));
-				}
-			} else {
-				if pan_origin.is_some() {
+					if origin.is_none() {
+						*origin = Some(PanOrigin {
+							cursor: Vec2::new(self.cursor_x, self.cursor_y),
+							position: Vec2::from(self.position),
+						});
+					}
+				} else {
 					self.window.set_cursor_icon(winit::window::CursorIcon::Grab);
-					*pan_origin = None;
+					if origin.is_some() {
+						*origin = None;
+					}
 				}
-			}
-		}
 
-		if self.is_cursor_pressed && self.pan_origin.is_none() {
-			if !self.is_mid_stroke {
-				self.strokes.push(Stroke::new());
-				self.is_mid_stroke = true;
-			}
-
-			if let Some(current_stroke) = self.strokes.last_mut() {
-				current_stroke.add_point(self.position[0] + self.cursor_x as f32, self.position[1] + self.cursor_y as f32, self.pressure.map_or(1., |pressure| (pressure / 32767.) as f32))
-			}
-		} else {
-			self.is_mid_stroke = false;
-		}
-
-		if let Some(Some((origin_cursor_x, origin_cursor_y, origin_position))) = self.pan_origin {
-			self.position = [origin_position[0] - (self.cursor_x - origin_cursor_x) as f32, origin_position[1] - (self.cursor_y - origin_cursor_y) as f32];
-			self.renderer.reposition(self.position);
+				if let Some(origin) = origin {
+					self.position = (origin.position - (Vec2::new(self.cursor_x, self.cursor_y) - origin.cursor).as_::<f32>()).into_array();
+					self.renderer.reposition(self.position);
+				}
+			},
 		}
 
 		// Apply a resize if necessary; resizes are time-intensive.
