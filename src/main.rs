@@ -1,5 +1,8 @@
+#![feature(array_windows)]
+
 mod app;
 mod render;
+mod stroke;
 mod wintab;
 
 use app::App;

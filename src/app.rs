@@ -1,3 +1,4 @@
+use fast_srgb8::srgb8_to_f32;
 #[cfg(target_os = "windows")]
 use winit::{
 	event::*,
@@ -5,7 +6,11 @@ use winit::{
 	window::WindowBuilder,
 };
 
-use crate::{render::Renderer, wintab::*};
+use crate::{
+	render::{CardInstance, Renderer},
+	stroke::Stroke,
+	wintab::*,
+};
 
 // Current state of our app.
 pub struct App {
@@ -15,9 +20,12 @@ pub struct App {
 	renderer: Renderer,
 	cursor_x: f64,
 	cursor_y: f64,
-	cursor_pressed: bool,
+	is_cursor_relevant: bool,
+	is_cursor_pressed: bool,
 	tablet_context: Option<TabletContext>,
 	pressure: Option<f64>,
+	strokes: Vec<Stroke>,
+	is_mid_stroke: bool,
 }
 
 impl App {
@@ -40,9 +48,12 @@ impl App {
 			renderer,
 			cursor_x: 0.,
 			cursor_y: 0.,
-			cursor_pressed: false,
+			is_cursor_relevant: false,
+			is_cursor_pressed: false,
 			tablet_context,
 			pressure: None,
+			strokes: Vec::new(),
+			is_mid_stroke: false,
 		}
 	}
 
@@ -74,6 +85,24 @@ impl App {
 						},
 						..
 					} => *control_flow = ControlFlow::Exit,
+					WindowEvent::KeyboardInput {
+						input: KeyboardInput {
+							state: ElementState::Pressed,
+							virtual_keycode: Some(VirtualKeyCode::Z),
+							..
+						},
+						..
+					} => {
+						self.strokes.pop();
+					},
+					WindowEvent::KeyboardInput {
+						input: KeyboardInput {
+							state: ElementState::Pressed,
+							virtual_keycode: Some(VirtualKeyCode::Delete),
+							..
+						},
+						..
+					} => self.strokes.clear(),
 
 					// Experiment with capturing cursor movements (currently changing clear color.)
 					WindowEvent::CursorMoved { position, .. } => {
@@ -81,12 +110,14 @@ impl App {
 						self.cursor_y = position.y;
 					},
 					WindowEvent::MouseInput { state, button: MouseButton::Left, .. } => {
-						self.cursor_pressed = *state == ElementState::Pressed;
+						self.is_cursor_pressed = *state == ElementState::Pressed;
 					},
 					WindowEvent::CursorEntered { .. } => {
+						self.is_cursor_relevant = true;
 						self.tablet_context.as_mut().map(|c| c.enable(true).unwrap());
 					},
 					WindowEvent::CursorLeft { .. } => {
+						self.is_cursor_relevant = false;
 						self.tablet_context.as_mut().map(|c| c.enable(false).unwrap());
 					},
 
@@ -114,7 +145,24 @@ impl App {
 			// If a window redraw is requested, have the renderer update and render.
 			Event::RedrawRequested(window_id) if window_id == self.window.id() => {
 				self.update_renderer();
-				match self.renderer.render() {
+				/*let card_instances = vec![
+					CardInstance {
+						position: [10., 10.],
+						dimensions: [202., 102.],
+						color: [srgb8_to_f32(0x2a), srgb8_to_f32(0xda), srgb8_to_f32(0xfa), 1.],
+						depth: 0.,
+						radius: 5.,
+					},
+					CardInstance {
+						position: [11.0, 11.0],
+						dimensions: [200.0, 100.0],
+						color: [srgb8_to_f32(0x1e), srgb8_to_f32(0x1e), srgb8_to_f32(0x1e), 1.],
+						depth: 0.,
+						radius: 4.,
+					},
+				];
+				*/
+				match self.renderer.render(&vec![], &self.strokes) {
 					Ok(_) => {},
 					Err(wgpu::SurfaceError::Lost) => self.renderer.resize(self.renderer.width, self.renderer.height),
 					Err(wgpu::SurfaceError::OutOfMemory) => *control_flow = ControlFlow::Exit,
@@ -125,7 +173,6 @@ impl App {
 			// If all redraw events have been cleared, suspend until a new event arrives.
 			Event::RedrawEventsCleared => {
 				*control_flow = ControlFlow::Wait;
-				self.pending_resize = None;
 			},
 
 			// Ignore all other events.
@@ -134,7 +181,7 @@ impl App {
 	}
 
 	fn poll_tablet(&mut self) {
-		if !self.cursor_pressed {
+		if !self.is_cursor_pressed {
 			self.pressure = None;
 		}
 
@@ -146,15 +193,32 @@ impl App {
 	}
 
 	fn update_renderer(&mut self) {
-		self.renderer.clear_color = wgpu::Color {
-			r: self.cursor_x / f64::from(self.renderer.width),
-			g: self.cursor_y / f64::from(self.renderer.height),
-			b: if self.cursor_pressed { self.pressure.map_or(1., |x| x / 32767.) } else { 0. },
-			a: 1.0,
+		self.renderer.clear_color = if self.is_cursor_relevant {
+			wgpu::Color {
+				r: self.cursor_x / f64::from(self.renderer.width),
+				g: self.cursor_y / f64::from(self.renderer.height),
+				b: if self.is_cursor_pressed { self.pressure.map_or(1., |x| x / 32767.) } else { 0. },
+				a: 1.0,
+			}
+		} else {
+			wgpu::Color::BLACK
 		};
 
+		if self.is_cursor_pressed {
+			if !self.is_mid_stroke {
+				self.strokes.push(Stroke::new());
+				self.is_mid_stroke = true;
+			}
+
+			if let Some(current_stroke) = self.strokes.last_mut() {
+				current_stroke.add_point(self.cursor_x as f32, self.cursor_y as f32, self.pressure.map_or(1., |pressure| (pressure / 32767.) as f32))
+			}
+		} else {
+			self.is_mid_stroke = false;
+		}
+
 		// Apply a resize if necessary; resizes are time-intensive.
-		if let Some(size) = self.pending_resize {
+		if let Some(size) = self.pending_resize.take() {
 			self.renderer.resize(size.width, size.height);
 		}
 
