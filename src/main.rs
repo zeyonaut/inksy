@@ -2,6 +2,7 @@
 #![feature(drain_filter)]
 
 mod app;
+mod buffer;
 mod input;
 mod render;
 mod stroke;

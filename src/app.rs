@@ -193,12 +193,14 @@ impl App {
 					WindowEvent::MouseInput { state, button: MouseButton::Left, .. } => {
 						self.input_monitor.process_mouse_input(state);
 					},
-					WindowEvent::MouseWheel { delta: MouseScrollDelta::LineDelta(lines, rows), .. } => {
+					WindowEvent::MouseWheel {
+						delta: MouseScrollDelta::LineDelta(lines, rows), ..
+					} => {
 						// Negative multiplier = reverse scrolling; positive multiplier = natural scrolling.
 						self.position[0] = self.position[0] + lines * -48.;
 						self.position[1] = self.position[1] + rows * -48.;
 						self.renderer.reposition(self.position);
-					}
+					},
 					WindowEvent::CursorMoved { position, .. } => {
 						self.cursor_x = position.x;
 						self.cursor_y = position.y;
@@ -415,7 +417,7 @@ impl App {
 
 		// FIXME: This is a little wasteful. Is it feasible to only update if something actually does change on-screen?
 		self.should_redraw = true;
-		
+
 		// Reset inputs.
 		self.input_monitor.defresh();
 	}

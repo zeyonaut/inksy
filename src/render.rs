@@ -6,7 +6,10 @@ use raw_window_handle::{HasRawDisplayHandle, HasRawWindowHandle};
 use wgpu::{util::DeviceExt, SurfaceTexture, VertexBufferLayout};
 use wgpu_glyph::{ab_glyph, GlyphBrushBuilder, Section, Text};
 
-use crate::stroke::{Canvas, Stroke};
+use crate::{
+	buffer::DynamicBuffer,
+	stroke::{Canvas, Stroke},
+};
 
 const MAX_FRAME_RATE: u16 = 60;
 
@@ -106,7 +109,6 @@ pub struct Renderer {
 	device: wgpu::Device,
 	queue: wgpu::Queue,
 	config: wgpu::SurfaceConfiguration,
-	//staging_belt: wgpu::util::StagingBelt,
 	pub width: u32,
 	pub height: u32,
 	pub position: [f32; 2],
@@ -116,20 +118,11 @@ pub struct Renderer {
 	viewport_buffer: wgpu::Buffer,
 	viewport_bind_group: wgpu::BindGroup,
 	rect_render_pipeline: wgpu::RenderPipeline,
-	//dejavu_sans_glyph_brush: wgpu_glyph::GlyphBrush<()>,
-	strokes_vertex_buffer_size: u64,
-	strokes_vertex_buffer: wgpu::Buffer,
-	strokes_index_buffer_size: u64,
-	strokes_index_buffer: wgpu::Buffer,
-	selections_vertex_buffer_size: u64,
-	selections_vertex_buffer: wgpu::Buffer,
+	strokes_vertex_buffer: DynamicBuffer<Vertex>,
+	strokes_index_buffer: DynamicBuffer<u16>,
+	selections_vertex_buffer: DynamicBuffer<CardInstance>,
 	rect_index_buffer: wgpu::Buffer,
 	rect_index_range: Range<u32>,
-	/*
-	vertex_buffer: wgpu::Buffer,
-	index_buffer: wgpu::Buffer,
-	index_range: Range<u32>,
-	*/
 }
 
 impl Renderer {
@@ -184,8 +177,6 @@ impl Renderer {
 			view_formats: vec![],
 		};
 		surface.configure(&device, &config);
-
-		//let staging_belt = wgpu::util::StagingBelt::new(1024);
 
 		// Create a viewport uniform buffer and bind group layout.
 		let viewport_bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
@@ -319,33 +310,9 @@ impl Renderer {
 			label: Some("viewport_bind_group"),
 		});
 
-		let strokes_vertex_buffer_size = (std::mem::size_of::<Vertex>() as u64 * (1 << 16)).next_power_of_two();
-
-		let strokes_vertex_buffer = device.create_buffer(&wgpu::BufferDescriptor {
-			label: Some("strokes_vertex_buffer"),
-			size: strokes_vertex_buffer_size,
-			usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
-			mapped_at_creation: false,
-		});
-
-		let strokes_index_buffer_size = (std::mem::size_of::<u16>() as u64 * (1 << 16)).next_power_of_two();
-
-		let strokes_index_buffer = device.create_buffer(&wgpu::BufferDescriptor {
-			label: Some("strokes_index_buffer"),
-			size: strokes_index_buffer_size,
-			usage: wgpu::BufferUsages::INDEX | wgpu::BufferUsages::COPY_DST,
-			mapped_at_creation: false,
-		});
-
-		// FIXME: Probably too large.
-		let selections_vertex_buffer_size = (std::mem::size_of::<CardInstance>() as u64 * (1 << 8)).next_power_of_two();
-
-		let selections_vertex_buffer = device.create_buffer(&wgpu::BufferDescriptor {
-			label: Some("selections_vertex_buffer"),
-			size: selections_vertex_buffer_size,
-			usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
-			mapped_at_creation: false,
-		});
+		let strokes_vertex_buffer = DynamicBuffer::<Vertex>::new(&device, wgpu::BufferUsages::VERTEX, 1 << 16);
+		let strokes_index_buffer = DynamicBuffer::<u16>::new(&device, wgpu::BufferUsages::INDEX, 1 << 16);
+		let selections_vertex_buffer = DynamicBuffer::<CardInstance>::new(&device, wgpu::BufferUsages::VERTEX, 1 << 0);
 
 		// This index buffer will be used for any roundrect draw calls.
 		const RECT_INDICES: &[u16] = &[0, 1, 2, 0, 2, 3];
@@ -357,19 +324,12 @@ impl Renderer {
 		});
 		let rect_index_range = 0..RECT_INDICES.len() as u32;
 
-		/*
-		let dejavu_sans = ab_glyph::FontArc::try_from_slice(include_bytes!("dejavu-sans-2.37/DejaVuSans.ttf")).unwrap();
-
-		let dejavu_sans_glyph_brush = GlyphBrushBuilder::using_font(dejavu_sans).build(&device, texture_format);
-
-		*/
 		// We return a new instance of our renderer state.
 		Self {
 			surface,
 			device,
 			queue,
 			config,
-			//staging_belt,
 			width,
 			height,
 			position,
@@ -379,15 +339,11 @@ impl Renderer {
 			viewport_buffer,
 			viewport_bind_group,
 			rect_render_pipeline,
-			strokes_vertex_buffer_size,
 			strokes_vertex_buffer,
-			strokes_index_buffer_size,
 			strokes_index_buffer,
 			selections_vertex_buffer,
-			selections_vertex_buffer_size,
 			rect_index_buffer,
 			rect_index_range,
-			//dejavu_sans_glyph_brush,
 		}
 	}
 
@@ -429,51 +385,12 @@ impl Renderer {
 
 		let strokes_index_range = 0..strokes_indices.len() as u32;
 
-		let mut new_strokes_vertices_len = strokes_vertices.len();
-		while (std::mem::size_of::<Vertex>() * new_strokes_vertices_len & wgpu::COPY_BUFFER_ALIGNMENT as usize - 1) != 0 {
-			new_strokes_vertices_len = (new_strokes_vertices_len + 1).next_power_of_two();
-		}
-
-		strokes_vertices.resize(new_strokes_vertices_len, Vertex { position: [0., 0., 0.], color: [0., 0., 0., 0.] });
-
-		let mut new_strokes_indices_len = strokes_indices.len();
-		while (std::mem::size_of::<u16>() * new_strokes_indices_len & wgpu::COPY_BUFFER_ALIGNMENT as usize - 1) != 0 {
-			new_strokes_indices_len = (new_strokes_indices_len + 1).next_power_of_two();
-		}
-
-		strokes_indices.resize(new_strokes_indices_len, 0);
-
-		if self.strokes_vertex_buffer_size < (std::mem::size_of::<Vertex>() * strokes_vertices.len()) as u64 {
-			self.strokes_vertex_buffer_size = (std::mem::size_of::<Vertex>() * strokes_vertices.len()).next_power_of_two() as u64;
-			self.strokes_vertex_buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
-				label: Some("strokes_vertex_buffer"),
-				size: self.strokes_vertex_buffer_size,
-				usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
-				mapped_at_creation: false,
-			});
-		}
-
-		if self.strokes_index_buffer_size < (std::mem::size_of::<u16>() * strokes_indices.len()) as u64 {
-			self.strokes_index_buffer_size = (std::mem::size_of::<u16>() * strokes_indices.len()).next_power_of_two() as u64;
-			self.strokes_index_buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
-				label: Some("strokes_index_buffer"),
-				size: self.strokes_index_buffer_size,
-				usage: wgpu::BufferUsages::INDEX | wgpu::BufferUsages::COPY_DST,
-				mapped_at_creation: false,
-			});
-		}
-
-		self.queue.write_buffer(&self.strokes_vertex_buffer, 0, bytemuck::cast_slice(&strokes_vertices));
-		self.queue.write_buffer(&self.strokes_index_buffer, 0, bytemuck::cast_slice(&strokes_indices));
-
-		let mut selection_card_instances = selection_card_instances.to_vec();
-		let mut new_selection_card_instances_len = selection_card_instances.len();
-		while (std::mem::size_of::<CardInstance>() * new_selection_card_instances_len & wgpu::COPY_BUFFER_ALIGNMENT as usize - 1) != 0 {
-			new_selection_card_instances_len = (new_selection_card_instances_len + 1).next_power_of_two();
-		}
-
-		selection_card_instances.resize(
-			new_selection_card_instances_len,
+		self.strokes_vertex_buffer.write(&self.device, &self.queue, strokes_vertices, Vertex { position: [0.; 3], color: [0.; 4] });
+		self.strokes_index_buffer.write(&self.device, &self.queue, strokes_indices, 0);
+		self.selections_vertex_buffer.write(
+			&self.device,
+			&self.queue,
+			selection_card_instances.to_vec(),
 			CardInstance {
 				position: [0.; 2],
 				dimensions: [0.; 2],
@@ -482,18 +399,6 @@ impl Renderer {
 				radius: 0.,
 			},
 		);
-
-		if self.selections_vertex_buffer_size < (std::mem::size_of::<CardInstance>() * selection_card_instances.len()) as u64 {
-			self.selections_vertex_buffer_size = (std::mem::size_of::<CardInstance>() * selection_card_instances.len()).next_power_of_two() as u64;
-			self.selections_vertex_buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
-				label: Some("selections_vertex_buffer"),
-				size: self.selections_vertex_buffer_size,
-				usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
-				mapped_at_creation: false,
-			});
-		}
-
-		self.queue.write_buffer(&self.selections_vertex_buffer, 0, bytemuck::cast_slice(&selection_card_instances));
 
 		// Set up the surface texture we will later render to.
 		let output = self.surface.get_current_texture()?;
@@ -521,38 +426,16 @@ impl Renderer {
 
 		// We activate our pipeline and supply a single vertex buffer, as promised.
 		render_pass.set_pipeline(&self.render_pipeline);
-		render_pass.set_vertex_buffer(0, self.strokes_vertex_buffer.slice(..));
-		render_pass.set_index_buffer(self.strokes_index_buffer.slice(..), wgpu::IndexFormat::Uint16);
+		render_pass.set_vertex_buffer(0, self.strokes_vertex_buffer.buffer.slice(..));
+		render_pass.set_index_buffer(self.strokes_index_buffer.buffer.slice(..), wgpu::IndexFormat::Uint16);
 		render_pass.draw_indexed(strokes_index_range.clone(), 0, 0..1);
 
 		render_pass.set_pipeline(&self.rect_render_pipeline);
-		render_pass.set_vertex_buffer(0, self.selections_vertex_buffer.slice(..));
+		render_pass.set_vertex_buffer(0, self.selections_vertex_buffer.buffer.slice(..));
 		render_pass.set_index_buffer(self.rect_index_buffer.slice(..), wgpu::IndexFormat::Uint16);
 		render_pass.draw_indexed(self.rect_index_range.clone(), 0, 0..selection_card_instances.len() as u32);
 
 		drop(render_pass);
-
-		/*
-		self.dejavu_sans_glyph_brush.queue(Section {
-			screen_position: (30.0, 30.0),
-			bounds: (self.width as f32, self.height as f32),
-			text: vec![Text::new("wgpu_glyph text 0").with_color([0.0, 0.0, 0.0, 1.0]).with_scale(40.0)],
-			..Section::default()
-		});
-
-		self.dejavu_sans_glyph_brush.queue(Section {
-			screen_position: (30.0, 90.0),
-			bounds: (self.width as f32, self.height as f32),
-			text: vec![Text::new("wgpu_glyph text 1").with_color([1.0, 1.0, 1.0, 1.0]).with_scale(40.0)],
-			..Section::default()
-		});
-
-		// Draw the text.
-		self.dejavu_sans_glyph_brush.draw_queued(&self.device, &mut self.staging_belt, &mut encoder, &view, self.width, self.height).expect("Draw queued");
-
-		// Submit the work.
-		self.staging_belt.finish();
-		*/
 
 		// Submit our commands and schedule the resultant texture for presentation.
 		self.queue.submit(std::iter::once(encoder.finish()));
