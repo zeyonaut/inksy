@@ -6,7 +6,7 @@ use raw_window_handle::{HasRawDisplayHandle, HasRawWindowHandle};
 use wgpu::{util::DeviceExt, SurfaceTexture, VertexBufferLayout};
 use wgpu_glyph::{ab_glyph, GlyphBrushBuilder, Section, Text};
 
-use crate::stroke::Stroke;
+use crate::stroke::{Canvas, Stroke};
 
 const MAX_FRAME_RATE: u16 = 60;
 
@@ -413,7 +413,7 @@ impl Renderer {
 
 	pub fn update(&mut self) {}
 
-	pub fn render(&mut self, selection_card_instances: &[CardInstance], strokes: &[Stroke]) -> Result<(), wgpu::SurfaceError> {
+	pub fn render(&mut self, selection_card_instances: &[CardInstance], mut strokes_vertices: Vec<Vertex>, mut strokes_indices: Vec<u16>) -> Result<(), wgpu::SurfaceError> {
 		if self.is_pending_resize {
 			// We write the new size to the viewport buffer.
 			self.queue.write_buffer(
@@ -425,17 +425,6 @@ impl Renderer {
 				}]),
 			);
 			self.is_pending_resize = false;
-		}
-
-		// Write strokes data into strokes buffers.
-		let mut strokes_vertices = vec![];
-		let mut strokes_indices = vec![];
-
-		for stroke in strokes {
-			let (stroke_vertices, stroke_indices) = stroke.build();
-			let current_index = u16::try_from(strokes_vertices.len()).unwrap();
-			strokes_vertices.extend(stroke_vertices.into_iter());
-			strokes_indices.extend(stroke_indices.into_iter().map(|n| n + current_index));
 		}
 
 		let strokes_index_range = 0..strokes_indices.len() as u32;

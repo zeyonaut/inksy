@@ -12,7 +12,7 @@ use winit::{
 
 use crate::{
 	render::{CardInstance, Renderer},
-	stroke::Stroke,
+	stroke::{Canvas, Stroke},
 	wintab::*,
 };
 
@@ -22,9 +22,10 @@ struct PanOrigin {
 }
 
 enum Mode {
-	Drawing { is_mid_stroke: bool },
+	Drawing { current_stroke: Option<Stroke> },
 	Selecting { origin: Option<Vec2<f32>> },
 	Panning { origin: Option<PanOrigin> },
+	Moving { origin: Option<Vec2<f32>> },
 }
 
 struct ModeStack {
@@ -63,7 +64,30 @@ impl ModeStack {
 
 	pub fn switch_draw(&mut self) {
 		if !matches!(self.base_mode, Mode::Drawing { .. }) {
-			self.base_mode = Mode::Drawing { is_mid_stroke: false }
+			self.base_mode = Mode::Drawing { current_stroke: None }
+		}
+	}
+
+	pub fn switch_move(&mut self) {
+		if !matches!(self.base_mode, Mode::Moving { .. }) {
+			self.base_mode = Mode::Moving { origin: None }
+		}
+	}
+
+	pub fn discard_draft(&mut self) {
+		match self.get_mut() {
+			Mode::Drawing { current_stroke } => *current_stroke = None,
+			Mode::Selecting { origin } => *origin = None,
+			Mode::Panning { .. } => {},
+			Mode::Moving { origin } => *origin = None,
+		}
+	}
+
+	pub fn current_stroke(&self) -> Option<&Stroke> {
+		if let Mode::Drawing { current_stroke } = &self.base_mode {
+			current_stroke.as_ref()
+		} else {
+			None
 		}
 	}
 }
@@ -79,9 +103,11 @@ pub struct App {
 	position: [f32; 2],
 	is_cursor_relevant: bool,
 	is_cursor_pressed: bool,
+	was_cursor_changed_this_frame: bool,
+	is_shift_pressed: bool,
 	tablet_context: Option<TabletContext>,
 	pressure: Option<f64>,
-	strokes: Vec<Stroke>,
+	canvas: Canvas,
 	mode_stack: ModeStack,
 	last_frame_instant: std::time::Instant,
 }
@@ -127,10 +153,12 @@ impl App {
 			position,
 			is_cursor_relevant: false,
 			is_cursor_pressed: false,
+			was_cursor_changed_this_frame: false,
+			is_shift_pressed: false,
 			tablet_context,
 			pressure: None,
-			strokes: Vec::new(),
-			mode_stack: ModeStack::new(Mode::Drawing { is_mid_stroke: false }),
+			canvas: Canvas::new(),
+			mode_stack: ModeStack::new(Mode::Drawing { current_stroke: None }),
 			last_frame_instant: Instant::now() - Duration::new(1, 0),
 		}
 	}
@@ -154,15 +182,29 @@ impl App {
 				self.should_redraw = true;
 				match event {
 					// If the titlebar close button is clicked  or the escape key is pressed, exit the loop.
-					WindowEvent::CloseRequested
-					| WindowEvent::KeyboardInput {
+					WindowEvent::CloseRequested => *control_flow = ControlFlow::Exit,
+					WindowEvent::KeyboardInput {
 						input: KeyboardInput {
 							state: ElementState::Pressed,
 							virtual_keycode: Some(VirtualKeyCode::Escape),
 							..
 						},
 						..
-					} => *control_flow = ControlFlow::Exit,
+					} => {
+						self.mode_stack.discard_draft();
+					},
+					WindowEvent::KeyboardInput {
+						input: KeyboardInput {
+							state: ElementState::Pressed,
+							virtual_keycode: Some(VirtualKeyCode::Q),
+							..
+						},
+						..
+					} => {
+						for stroke in self.canvas.strokes.iter_mut().filter(|x| x.is_selected) {
+							stroke.is_selected = false;
+						}
+					},
 					WindowEvent::KeyboardInput {
 						input: KeyboardInput {
 							state: ElementState::Pressed,
@@ -171,7 +213,9 @@ impl App {
 						},
 						..
 					} => {
-						self.strokes.pop();
+						if !self.is_cursor_pressed {
+							self.canvas.strokes.pop();
+						}
 					},
 					WindowEvent::KeyboardInput {
 						input: KeyboardInput {
@@ -195,6 +239,16 @@ impl App {
 					},
 					WindowEvent::KeyboardInput {
 						input: KeyboardInput {
+							state: ElementState::Pressed,
+							virtual_keycode: Some(VirtualKeyCode::T),
+							..
+						},
+						..
+					} => {
+						self.mode_stack.switch_move();
+					},
+					WindowEvent::KeyboardInput {
+						input: KeyboardInput {
 							state,
 							virtual_keycode: Some(VirtualKeyCode::Space),
 							..
@@ -212,19 +266,35 @@ impl App {
 					},
 					WindowEvent::KeyboardInput {
 						input: KeyboardInput {
-							state: ElementState::Pressed,
-							virtual_keycode: Some(VirtualKeyCode::Delete),
+							state,
+							virtual_keycode: Some(VirtualKeyCode::LShift),
 							..
 						},
 						..
-					} => self.strokes.clear(),
+					} => match state {
+						ElementState::Pressed => {
+							self.is_shift_pressed = true;
+						},
+						ElementState::Released => {
+							self.is_shift_pressed = false;
+						},
+					},
+					WindowEvent::KeyboardInput {
+						input: KeyboardInput {
+							state: ElementState::Pressed,
+							virtual_keycode: Some(VirtualKeyCode::X),
+							..
+						},
+						..
+					} => for _ in self.canvas.strokes.drain_filter(|x| x.is_selected) {},
 
 					WindowEvent::CursorMoved { position, .. } => {
 						self.cursor_x = position.x;
 						self.cursor_y = position.y;
 					},
 					WindowEvent::MouseInput { state, button: MouseButton::Left, .. } => {
-						self.is_cursor_pressed = *state == ElementState::Pressed;
+						self.was_cursor_changed_this_frame = self.is_cursor_pressed != (*state == ElementState::Pressed);
+						self.is_cursor_pressed = self.was_cursor_changed_this_frame ^ self.is_cursor_pressed;
 					},
 					WindowEvent::CursorEntered { .. } => {
 						self.is_cursor_relevant = true;
@@ -298,7 +368,15 @@ impl App {
 			vec![]
 		};
 
-		self.renderer.render(&card_instances, &self.strokes)
+		let selection_offset = if let Mode::Moving { origin: Some(origin) } = &self.mode_stack.base_mode {
+			Some(Vec2::from(self.position) + Vec2::new(self.cursor_x, self.cursor_y).as_::<f32>() - *origin)
+		} else {
+			None
+		};
+
+		let (strokes_vertices, strokes_indices) = self.canvas.bake(self.mode_stack.current_stroke(), selection_offset);
+
+		self.renderer.render(&card_instances, strokes_vertices, strokes_indices)
 	}
 
 	fn poll_tablet(&mut self) {
@@ -314,49 +392,41 @@ impl App {
 	}
 
 	fn update_renderer(&mut self) {
-		/*if self.is_cursor_relevant {
-			wgpu::Color {
-				r: self.cursor_x / f64::from(self.renderer.width),
-				g: self.cursor_y / f64::from(self.renderer.height),
-				b: if self.is_cursor_pressed { self.pressure.map_or(1., |x| x / 32767.) } else { 0. },
-				a: 1.0,
-			}
-		} else {
-			wgpu::Color::BLACK
-		}*/
-
 		match self.mode_stack.get_mut() {
-			Mode::Drawing { is_mid_stroke } => {
+			Mode::Drawing { current_stroke } => {
 				self.window.set_cursor_icon(winit::window::CursorIcon::Arrow);
 				if self.is_cursor_pressed {
-					if !*is_mid_stroke {
-						self.strokes.push(Stroke::new());
-						*is_mid_stroke = true;
+					if self.was_cursor_changed_this_frame && current_stroke.is_none() {
+						*current_stroke = Some(Stroke::new());
 					}
 
-					if let Some(current_stroke) = self.strokes.last_mut() {
+					if let Some(current_stroke) = current_stroke {
 						current_stroke.add_point(self.position[0] + self.cursor_x as f32, self.position[1] + self.cursor_y as f32, self.pressure.map_or(1., |pressure| (pressure / 32767.) as f32))
 					}
 				} else {
-					*is_mid_stroke = false;
+					self.canvas.strokes.extend(current_stroke.take());
 				}
 			},
 			Mode::Selecting { origin } => {
 				self.window.set_cursor_icon(winit::window::CursorIcon::Crosshair);
 
 				if self.is_cursor_pressed {
-					if origin.is_none() {
+					if self.was_cursor_changed_this_frame && origin.is_none() {
 						*origin = Some(Vec2::from(self.position) + Vec2::new(self.cursor_x, self.cursor_y).as_::<f32>());
 					}
 				} else {
-					if origin.is_some() {
-						*origin = None;
+					if let Some(origin) = origin.take() {
+						let current = Vec2::<f32>::from(self.position) + Vec2::new(self.cursor_x, self.cursor_y).as_::<f32>();
+						let min = Vec2::new(current.x.min(origin.x), current.y.min(origin.y));
+						let max = Vec2::new(current.x.max(origin.x), current.y.max(origin.y));
+						self.canvas.select(min, max, self.is_shift_pressed);
 					}
 				}
 			},
 			Mode::Panning { origin } => {
 				if self.is_cursor_pressed {
 					self.window.set_cursor_icon(winit::window::CursorIcon::Grabbing);
+					// TODO: We ignore was_cursor_changed_this_frame; figure out a consistent, intuitive standard across modes.
 					if origin.is_none() {
 						*origin = Some(PanOrigin {
 							cursor: Vec2::new(self.cursor_x, self.cursor_y),
@@ -375,6 +445,23 @@ impl App {
 					self.renderer.reposition(self.position);
 				}
 			},
+			Mode::Moving { origin } => {
+				self.window.set_cursor_icon(winit::window::CursorIcon::Move);
+
+				if self.is_cursor_pressed {
+					if self.was_cursor_changed_this_frame && origin.is_none() {
+						*origin = Some(Vec2::from(self.position) + Vec2::new(self.cursor_x, self.cursor_y).as_::<f32>());
+					}
+				} else {
+					if let Some(origin) = origin.take() {
+						let selection_offset = Vec2::<f32>::from(self.position) + Vec2::new(self.cursor_x, self.cursor_y).as_::<f32>() - origin;
+
+						for stroke in self.canvas.strokes.iter_mut().filter(|x| x.is_selected) {
+							stroke.origin = stroke.origin + selection_offset;
+						}
+					}
+				}
+			},
 		}
 
 		// Apply a resize if necessary; resizes are time-intensive.
@@ -383,5 +470,8 @@ impl App {
 		}
 
 		self.renderer.update();
+
+		// Reset inputs.
+		self.was_cursor_changed_this_frame = false;
 	}
 }

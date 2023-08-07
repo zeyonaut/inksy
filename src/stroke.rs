@@ -9,14 +9,20 @@ pub struct Point {
 }
 
 pub struct Stroke {
+	pub origin: Vec2<f32>,
 	pub points: Vec<Point>,
+	pub is_selected: bool,
 }
 
 const STROKE_RADIUS: f32 = 8.;
 
 impl Stroke {
 	pub fn new() -> Self {
-		Self { points: Vec::new() }
+		Self {
+			origin: Vec2::zero(),
+			points: Vec::new(),
+			is_selected: false,
+		}
 	}
 
 	pub fn add_point(&mut self, x: f32, y: f32, pressure: f32) {
@@ -24,45 +30,82 @@ impl Stroke {
 			self.points.push(Point { position: Vec2::new(x, y), pressure });
 		}
 	}
+}
 
-	pub fn build(&self) -> (Vec<Vertex>, Vec<u16>) {
-		let mut positions = vec![];
-		let mut indices = vec![];
-		let perpendiculars = self
-			.points
-			.array_windows::<2>()
-			.map(|[a, b]| {
-				let forward = b.position - a.position;
-				Vec2::new(forward.y, -forward.x).normalized() * STROKE_RADIUS
-			})
-			.collect::<Vec<_>>();
+pub struct Canvas {
+	pub strokes: Vec<Stroke>,
+}
 
-		for ([a, b], p) in self.points.array_windows::<2>().zip(&perpendiculars) {
-			let current_index = u16::try_from(positions.len()).unwrap();
-			positions.extend([a.position + p * a.pressure, a.position - p * a.pressure, b.position + p * b.pressure, b.position - p * b.pressure]);
-			indices.extend([0, 2, 3, 0, 3, 1].map(|n| current_index + n));
-		}
+impl Canvas {
+	pub fn new() -> Self {
+		Self { strokes: Vec::new() }
+	}
 
-		for (i, ([_, b, _], [p, q])) in self.points.array_windows::<3>().zip(perpendiculars.array_windows::<2>()).enumerate() {
-			let i = u16::try_from(i).unwrap();
-			let cross_product = p.x * q.y - p.y * q.x;
-
-			if cross_product > 0. {
-				/* Clockwise */
-				indices.extend([2, 4 + 0, 4 + 1].map(|n| n + i * 4));
-			} else if cross_product < 0. {
-				/* Counterclockwise */
-				indices.extend([3, 4 + 1, 4 + 0].map(|n| n + i * 4));
+	pub fn select(&mut self, min: Vec2<f32>, max: Vec2<f32>, should_aggregate: bool) {
+		'strokes: for stroke in self.strokes.iter_mut() {
+			let min = min - stroke.origin;
+			let max = max - stroke.origin;
+			if should_aggregate {
+				for point in stroke.points.iter() {
+					if point.position.x >= min.x && point.position.y >= min.y && point.position.x <= max.x && point.position.y <= max.y {
+						stroke.is_selected = !stroke.is_selected;
+						continue 'strokes;
+					}
+				}
+			} else {
+				for point in stroke.points.iter() {
+					if point.position.x >= min.x && point.position.y >= min.y && point.position.x <= max.x && point.position.y <= max.y {
+						stroke.is_selected = true;
+						continue 'strokes;
+					}
+				}
+				stroke.is_selected = false;
 			}
 		}
+	}
 
-		let vertices = positions
-			.into_iter()
-			.map(|position| Vertex {
+	pub fn bake(&self, current_stroke: Option<&Stroke>, selection_offset: Option<Vec2<f32>>) -> (Vec<Vertex>, Vec<u16>) {
+		let mut vertices = vec![];
+		let mut indices = vec![];
+
+		for stroke in self.strokes.iter().chain(current_stroke.into_iter()) {
+			let stroke_offset = if stroke.is_selected { selection_offset.unwrap_or(Vec2::zero()) } else { Vec2::zero() };
+			let stroke_index = u16::try_from(vertices.len()).unwrap();
+			let mut positions = vec![];
+			let perpendiculars = stroke
+				.points
+				.array_windows::<2>()
+				.map(|[a, b]| {
+					let forward = b.position - a.position;
+					Vec2::new(forward.y, -forward.x).normalized() * STROKE_RADIUS
+				})
+				.collect::<Vec<_>>();
+
+			for ([a, b], p) in stroke.points.array_windows::<2>().zip(&perpendiculars) {
+				let current_index = stroke_index + u16::try_from(positions.len()).unwrap();
+				positions.extend([a.position + p * a.pressure, a.position - p * a.pressure, b.position + p * b.pressure, b.position - p * b.pressure].map(|x| x + stroke.origin + stroke_offset));
+				indices.extend([0, 2, 3, 0, 3, 1].map(|n| current_index + n));
+			}
+
+			for (i, ([_, b, _], [p, q])) in stroke.points.array_windows::<3>().zip(perpendiculars.array_windows::<2>()).enumerate() {
+				let i = u16::try_from(i).unwrap();
+				let cross_product = p.x * q.y - p.y * q.x;
+
+				if cross_product > 0. {
+					/* Clockwise */
+					indices.extend([2, 4 + 0, 4 + 1].map(|n| stroke_index + n + i * 4));
+				} else if cross_product < 0. {
+					/* Counterclockwise */
+					indices.extend([3, 4 + 1, 4 + 0].map(|n| stroke_index + n + i * 4));
+				}
+			}
+
+			vertices.extend(positions.into_iter().map(|position| Vertex {
 				position: [position.x, position.y, 0.],
-				color: [0xfb, 0xfb, 0xff, 0xff].map(srgb8_to_f32),
-			})
-			.collect();
+				color: if !stroke.is_selected { [0xfb, 0xfb, 0xff, 0xff] } else { [0x01, 0x6f, 0xb9, 0xff] }.map(srgb8_to_f32),
+			}));
+		}
+
 		(vertices, indices)
 	}
 }
