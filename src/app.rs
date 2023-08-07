@@ -1,7 +1,7 @@
 use std::time::{Duration, Instant};
 
 use fast_srgb8::srgb8_to_f32;
-use vek::Vec2;
+use vek::{Vec2, Vec3};
 use winit::dpi::{PhysicalPosition, PhysicalSize};
 #[cfg(target_os = "windows")]
 use winit::{
@@ -12,7 +12,7 @@ use winit::{
 
 use crate::{
 	input::{Input, InputMonitor},
-	render::{CardInstance, Renderer},
+	render::{CardInstance, ColorWheelInstance, Renderer},
 	stroke::{Canvas, Stroke},
 	wintab::*,
 };
@@ -27,6 +27,7 @@ enum Mode {
 	Selecting { origin: Option<Vec2<f32>> },
 	Panning { origin: Option<PanOrigin> },
 	Moving { origin: Option<Vec2<f32>> },
+	ChoosingColor { cursor_origin: Vec2<f32>, is_selecting_hue: bool },
 }
 
 struct ModeStack {
@@ -57,6 +58,16 @@ impl ModeStack {
 		}
 	}
 
+	pub fn temp_choose(&mut self, cursor_origin: Option<Vec2<f32>>) {
+		if let Some(cursor_origin) = cursor_origin {
+			if !matches!(self.transient_mode, Some(Mode::ChoosingColor { .. })) {
+				self.transient_mode = Some(Mode::ChoosingColor { cursor_origin, is_selecting_hue: false });
+			}
+		} else {
+			self.transient_mode = None;
+		}
+	}
+
 	pub fn switch_select(&mut self) {
 		if !matches!(self.base_mode, Mode::Selecting { .. }) {
 			self.base_mode = Mode::Selecting { origin: None }
@@ -79,8 +90,8 @@ impl ModeStack {
 		match self.get_mut() {
 			Mode::Drawing { current_stroke } => current_stroke.is_some(),
 			Mode::Selecting { origin } => origin.is_some(),
-			Mode::Panning { .. } => false,
 			Mode::Moving { origin } => origin.is_some(),
+			_ => false,
 		}
 	}
 
@@ -88,8 +99,8 @@ impl ModeStack {
 		match self.get_mut() {
 			Mode::Drawing { current_stroke } => *current_stroke = None,
 			Mode::Selecting { origin } => *origin = None,
-			Mode::Panning { .. } => {},
 			Mode::Moving { origin } => *origin = None,
+			_ => {},
 		}
 	}
 
@@ -118,6 +129,7 @@ pub struct App {
 	mode_stack: ModeStack,
 	last_frame_instant: std::time::Instant,
 	input_monitor: InputMonitor,
+	current_color: [u8; 4],
 }
 
 impl App {
@@ -140,9 +152,9 @@ impl App {
 
 		// Make the window visible and immediately clear color to prevent a flash.
 		renderer.clear_color = wgpu::Color {
-			r: srgb8_to_f32(0x04) as f64,
-			g: srgb8_to_f32(0x0f) as f64,
-			b: srgb8_to_f32(0x16) as f64,
+			r: srgb8_to_f32(0x12) as f64,
+			g: srgb8_to_f32(0x12) as f64,
+			b: srgb8_to_f32(0x12) as f64,
 			a: srgb8_to_f32(0xff) as f64,
 		};
 		let output = renderer.clear().unwrap();
@@ -166,6 +178,7 @@ impl App {
 			mode_stack: ModeStack::new(Mode::Drawing { current_stroke: None }),
 			last_frame_instant: Instant::now() - Duration::new(1, 0),
 			input_monitor: InputMonitor::new(),
+			current_color: [0xfb, 0xfb, 0xff, 0xff],
 		}
 	}
 
@@ -179,9 +192,7 @@ impl App {
 	fn handle_event(&mut self, event: Event<()>, control_flow: &mut ControlFlow) {
 		match event {
 			// Emitted when the event loop resumes.
-			Event::NewEvents(_) => {
-				self.should_redraw = false;
-			},
+			Event::NewEvents(_) => {},
 			// Check if a window event has occurred.
 			Event::WindowEvent { ref event, window_id } if window_id == self.window.id() => {
 				match event {
@@ -231,9 +242,7 @@ impl App {
 			Event::MainEventsCleared => {
 				self.poll_tablet();
 				self.process_input();
-				if self.should_redraw {
-					self.window.request_redraw();
-				}
+				self.window.request_redraw();
 			},
 
 			// If a window redraw is requested, have the renderer update and render.
@@ -241,7 +250,7 @@ impl App {
 				self.update_renderer();
 
 				// Only render if it's been too long since the last render.
-				if (Instant::now() - self.last_frame_instant) >= Duration::new(1, 0) / 90 {
+				if self.should_redraw || (Instant::now() - self.last_frame_instant) >= Duration::new(1, 0) / 90 {
 					self.last_frame_instant = Instant::now();
 
 					match self.repaint() {
@@ -250,6 +259,8 @@ impl App {
 						Err(wgpu::SurfaceError::OutOfMemory) => *control_flow = ControlFlow::Exit,
 						Err(e) => eprintln!("{:?}", e),
 					}
+
+					self.should_redraw = false;
 				}
 			},
 
@@ -278,6 +289,17 @@ impl App {
 			vec![]
 		};
 
+		let colorwheel_instances = if let Mode::ChoosingColor { cursor_origin, .. } = self.mode_stack.get() {
+			vec![ColorWheelInstance {
+				position: (cursor_origin - 160.).into_array(),
+				radius_major: 160.,
+				radius_minor: 120.,
+				depth: 0.,
+			}]
+		} else {
+			vec![]
+		};
+
 		let selection_offset = if let Mode::Moving { origin: Some(origin) } = &self.mode_stack.base_mode {
 			Some(Vec2::from(self.position) + Vec2::new(self.cursor_x, self.cursor_y).as_::<f32>() - *origin)
 		} else {
@@ -286,7 +308,7 @@ impl App {
 
 		let (strokes_vertices, strokes_indices) = self.canvas.bake(self.mode_stack.current_stroke(), selection_offset);
 
-		self.renderer.render(&card_instances, strokes_vertices, strokes_indices)
+		self.renderer.render(&card_instances, strokes_vertices, strokes_indices, colorwheel_instances)
 	}
 
 	fn poll_tablet(&mut self) {
@@ -306,6 +328,8 @@ impl App {
 		use Input::*;
 
 		if self.input_monitor.is_fresh {
+			self.should_redraw = true;
+
 			use crate::input::Input::*;
 			if self.input_monitor.inputs[B].was_pressed() {
 				self.mode_stack.switch_draw();
@@ -341,6 +365,13 @@ impl App {
 					self.mode_stack.temp_pan(false);
 				}
 			}
+			if self.input_monitor.inputs[Tab].is_different {
+				if self.input_monitor.inputs[Tab].is_active {
+					self.mode_stack.temp_choose(Some(Vec2::new(self.cursor_x as f32, self.cursor_y as f32)));
+				} else {
+					self.mode_stack.temp_choose(None);
+				}
+			}
 		}
 
 		match self.mode_stack.get_mut() {
@@ -348,7 +379,7 @@ impl App {
 				self.window.set_cursor_icon(winit::window::CursorIcon::Arrow);
 				if self.input_monitor.inputs[LMouse].is_active {
 					if self.input_monitor.inputs[LMouse].is_different && current_stroke.is_none() {
-						*current_stroke = Some(Stroke::new());
+						*current_stroke = Some(Stroke::new(self.current_color));
 					}
 
 					if let Some(current_stroke) = current_stroke {
@@ -410,6 +441,31 @@ impl App {
 						for stroke in self.canvas.strokes.iter_mut().filter(|x| x.is_selected) {
 							stroke.origin = stroke.origin + selection_offset;
 						}
+					}
+				}
+			},
+			Mode::ChoosingColor { cursor_origin, is_selecting_hue } => {
+				self.window.set_cursor_icon(winit::window::CursorIcon::Crosshair);
+
+				if self.input_monitor.inputs[LMouse].is_active && (self.input_monitor.inputs[LMouse].is_different || *is_selecting_hue) {
+					let cursor = Vec2::new(self.cursor_x as f32, self.cursor_y as f32);
+					let center = *cursor_origin;
+					let vector = cursor - center;
+					let magnitude = vector.magnitude();
+					if magnitude >= 120. && magnitude <= 160. {
+						*is_selecting_hue = true;
+						let normalized_angle = vector.y.atan2(vector.x) / (2.0 * std::f32::consts::PI) + 0.5;
+
+						fn hsv_to_srgb(h: f32, s: f32, v: f32) -> [f32; 3] {
+							fn hue(h: f32) -> [f32; 3] {
+								[(h * 6. - 3.).abs() - 1., 2. - (h * 6. - 2.).abs(), 2. - (h * 6. - 4.).abs()].map(|n| n.clamp(0., 1.))
+							}
+							hue(h).map(|n: f32| ((n - 1.) * s + 1.) * v)
+						}
+
+						let srgb = hsv_to_srgb(normalized_angle, 1., 1.).map(|n| if n >= 1.0 { 255 } else { (n * 256.) as u8 });
+
+						self.current_color = [srgb[0], srgb[1], srgb[2], 0xff];
 					}
 				}
 			},

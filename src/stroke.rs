@@ -10,6 +10,7 @@ pub struct Point {
 
 pub struct Stroke {
 	pub origin: Vec2<f32>,
+	pub color: [u8; 4],
 	pub points: Vec<Point>,
 	pub is_selected: bool,
 }
@@ -17,9 +18,10 @@ pub struct Stroke {
 const STROKE_RADIUS: f32 = 8.;
 
 impl Stroke {
-	pub fn new() -> Self {
+	pub fn new(color: [u8; 4]) -> Self {
 		Self {
 			origin: Vec2::zero(),
+			color,
 			points: Vec::new(),
 			is_selected: false,
 		}
@@ -102,7 +104,7 @@ impl Canvas {
 
 			vertices.extend(positions.into_iter().map(|position| Vertex {
 				position: [position.x, position.y, 0.],
-				color: if !stroke.is_selected { [0xfb, 0xfb, 0xff, 0xff] } else { [0x01, 0x6f, 0xb9, 0xff] }.map(srgb8_to_f32),
+				color: if !stroke.is_selected { stroke.color } else { [0x01, 0x6f, 0xb9, 0xff] }.map(srgb8_to_f32),
 			}));
 		}
 

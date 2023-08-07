@@ -103,6 +103,47 @@ impl CardInstance {
 	}
 }
 
+#[repr(C)]
+#[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
+pub struct ColorWheelInstance {
+	pub position: [f32; 2],
+	pub radius_major: f32,
+	pub radius_minor: f32,
+	pub depth: f32,
+}
+
+impl ColorWheelInstance {
+	// Returns the layout of buffers composed of instances of Vertex.
+	pub fn buffer_layout<'a>() -> VertexBufferLayout<'a> {
+		wgpu::VertexBufferLayout {
+			array_stride: std::mem::size_of::<Self>() as wgpu::BufferAddress,
+			step_mode: wgpu::VertexStepMode::Instance,
+			attributes: &[
+				wgpu::VertexAttribute {
+					offset: 0,
+					shader_location: 0,
+					format: wgpu::VertexFormat::Float32x2,
+				},
+				wgpu::VertexAttribute {
+					offset: std::mem::size_of::<[f32; 2]>() as wgpu::BufferAddress,
+					shader_location: 1,
+					format: wgpu::VertexFormat::Float32,
+				},
+				wgpu::VertexAttribute {
+					offset: std::mem::size_of::<[f32; 3]>() as wgpu::BufferAddress,
+					shader_location: 2,
+					format: wgpu::VertexFormat::Float32,
+				},
+				wgpu::VertexAttribute {
+					offset: std::mem::size_of::<[f32; 4]>() as wgpu::BufferAddress,
+					shader_location: 3,
+					format: wgpu::VertexFormat::Float32,
+				},
+			],
+		}
+	}
+}
+
 // This struct stores the current state of the WGPU renderer.
 pub struct Renderer {
 	surface: wgpu::Surface,
@@ -114,13 +155,15 @@ pub struct Renderer {
 	pub position: [f32; 2],
 	pub is_pending_resize: bool,
 	pub clear_color: wgpu::Color,
-	render_pipeline: wgpu::RenderPipeline,
 	viewport_buffer: wgpu::Buffer,
 	viewport_bind_group: wgpu::BindGroup,
+	render_pipeline: wgpu::RenderPipeline,
 	rect_render_pipeline: wgpu::RenderPipeline,
+	colorwheel_render_pipeline: wgpu::RenderPipeline,
 	strokes_vertex_buffer: DynamicBuffer<Vertex>,
 	strokes_index_buffer: DynamicBuffer<u16>,
 	selections_vertex_buffer: DynamicBuffer<CardInstance>,
+	colorwheel_vertex_buffer: DynamicBuffer<ColorWheelInstance>,
 	rect_index_buffer: wgpu::Buffer,
 	rect_index_range: Range<u32>,
 }
@@ -292,6 +335,55 @@ impl Renderer {
 			})
 		};
 
+		let colorwheel_render_pipeline = {
+			let colorwheel_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+				label: Some("colorwheel_shader"),
+				source: wgpu::ShaderSource::Wgsl(include_str!("colorwheel.wgsl").into()),
+			});
+
+			let colorwheel_render_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+				label: Some("colorwheel_render_pipeline_layout"),
+				bind_group_layouts: &[&viewport_bind_group_layout],
+				push_constant_ranges: &[],
+			});
+
+			// We promise to supply a single vertex buffer in each render pass.
+			device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+				label: Some("colorwheel_render_pipeline"),
+				layout: Some(&colorwheel_render_pipeline_layout),
+				vertex: wgpu::VertexState {
+					module: &colorwheel_shader,
+					entry_point: "vs_main",
+					buffers: &[ColorWheelInstance::buffer_layout()],
+				},
+				fragment: Some(wgpu::FragmentState {
+					module: &colorwheel_shader,
+					entry_point: "fs_main",
+					targets: &[Some(wgpu::ColorTargetState {
+						format: config.format,
+						blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+						write_mask: wgpu::ColorWrites::ALL,
+					})],
+				}),
+				primitive: wgpu::PrimitiveState {
+					topology: wgpu::PrimitiveTopology::TriangleList,
+					strip_index_format: None,
+					front_face: wgpu::FrontFace::Cw,
+					cull_mode: Some(wgpu::Face::Back),
+					polygon_mode: wgpu::PolygonMode::Fill,
+					unclipped_depth: false,
+					conservative: false,
+				},
+				depth_stencil: None,
+				multisample: wgpu::MultisampleState {
+					count: 1,
+					mask: !0,
+					alpha_to_coverage_enabled: false,
+				},
+				multiview: None,
+			})
+		};
+
 		let viewport_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
 			label: Some("viewport_buffer"),
 			contents: bytemuck::cast_slice(&[ViewportUniform {
@@ -313,8 +405,9 @@ impl Renderer {
 		let strokes_vertex_buffer = DynamicBuffer::<Vertex>::new(&device, wgpu::BufferUsages::VERTEX, 1 << 16);
 		let strokes_index_buffer = DynamicBuffer::<u16>::new(&device, wgpu::BufferUsages::INDEX, 1 << 16);
 		let selections_vertex_buffer = DynamicBuffer::<CardInstance>::new(&device, wgpu::BufferUsages::VERTEX, 1 << 0);
+		let colorwheel_vertex_buffer = DynamicBuffer::<ColorWheelInstance>::new(&device, wgpu::BufferUsages::VERTEX, 1 << 0);
 
-		// This index buffer will be used for any roundrect draw calls.
+		// This index buffer will be used for any roundrect and colorwheel draw calls.
 		const RECT_INDICES: &[u16] = &[0, 1, 2, 0, 2, 3];
 
 		let rect_index_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -335,13 +428,15 @@ impl Renderer {
 			position,
 			is_pending_resize: false,
 			clear_color: wgpu::Color::BLACK,
-			render_pipeline,
 			viewport_buffer,
 			viewport_bind_group,
+			render_pipeline,
 			rect_render_pipeline,
+			colorwheel_render_pipeline,
 			strokes_vertex_buffer,
 			strokes_index_buffer,
 			selections_vertex_buffer,
+			colorwheel_vertex_buffer,
 			rect_index_buffer,
 			rect_index_range,
 		}
@@ -369,7 +464,7 @@ impl Renderer {
 
 	pub fn update(&mut self) {}
 
-	pub fn render(&mut self, selection_card_instances: &[CardInstance], mut strokes_vertices: Vec<Vertex>, mut strokes_indices: Vec<u16>) -> Result<(), wgpu::SurfaceError> {
+	pub fn render(&mut self, selection_card_instances: &[CardInstance], mut strokes_vertices: Vec<Vertex>, mut strokes_indices: Vec<u16>, mut colorwheel_instances: Vec<ColorWheelInstance>) -> Result<(), wgpu::SurfaceError> {
 		if self.is_pending_resize {
 			// We write the new size to the viewport buffer.
 			self.queue.write_buffer(
@@ -397,6 +492,18 @@ impl Renderer {
 				color: [0.; 4],
 				depth: 0.,
 				radius: 0.,
+			},
+		);
+		let colorwheel_instance_range = 0..colorwheel_instances.len() as u32;
+		self.colorwheel_vertex_buffer.write(
+			&self.device,
+			&self.queue,
+			colorwheel_instances,
+			ColorWheelInstance {
+				position: [0.; 2],
+				radius_major: 0.,
+				radius_minor: 0.,
+				depth: 0.,
 			},
 		);
 
@@ -434,6 +541,11 @@ impl Renderer {
 		render_pass.set_vertex_buffer(0, self.selections_vertex_buffer.buffer.slice(..));
 		render_pass.set_index_buffer(self.rect_index_buffer.slice(..), wgpu::IndexFormat::Uint16);
 		render_pass.draw_indexed(self.rect_index_range.clone(), 0, 0..selection_card_instances.len() as u32);
+
+		render_pass.set_pipeline(&self.colorwheel_render_pipeline);
+		render_pass.set_vertex_buffer(0, self.colorwheel_vertex_buffer.buffer.slice(..));
+		render_pass.set_index_buffer(self.rect_index_buffer.slice(..), wgpu::IndexFormat::Uint16);
+		render_pass.draw_indexed(self.rect_index_range.clone(), 0, colorwheel_instance_range);
 
 		drop(render_pass);
 
