@@ -115,7 +115,7 @@ pub struct App {
 impl App {
 	// Sets up the logger and renderer.
 	pub fn new(event_loop: &EventLoop<()>) -> Self {
-		let window = WindowBuilder::new().with_title("Inskriva").with_visible(false).build(event_loop).unwrap();
+		let window = WindowBuilder::new().with_title("Inkslate").with_visible(false).build(event_loop).unwrap();
 
 		// Resize the window to a reasonable size.
 		let monitor_size = window.current_monitor().unwrap().size();
