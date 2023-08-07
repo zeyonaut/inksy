@@ -17,6 +17,7 @@ bytemuck = { version = "1.12.1", features = [ "derive", "min_const_generics" ] }
 bitflags = "2.3.3"
 fast-srgb8 = "1.0"
 vek = "0.16.1"
+enum-map = "2.6.1"
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = "0.48"

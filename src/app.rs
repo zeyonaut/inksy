@@ -11,6 +11,7 @@ use winit::{
 };
 
 use crate::{
+	input::{Input, InputMonitor},
 	render::{CardInstance, Renderer},
 	stroke::{Canvas, Stroke},
 	wintab::*,
@@ -74,6 +75,15 @@ impl ModeStack {
 		}
 	}
 
+	pub fn is_drafting(&mut self) -> bool {
+		match self.get_mut() {
+			Mode::Drawing { current_stroke } => current_stroke.is_some(),
+			Mode::Selecting { origin } => origin.is_some(),
+			Mode::Panning { .. } => false,
+			Mode::Moving { origin } => origin.is_some(),
+		}
+	}
+
 	pub fn discard_draft(&mut self) {
 		match self.get_mut() {
 			Mode::Drawing { current_stroke } => *current_stroke = None,
@@ -102,14 +112,12 @@ pub struct App {
 	cursor_y: f64,
 	position: [f32; 2],
 	is_cursor_relevant: bool,
-	is_cursor_pressed: bool,
-	was_cursor_changed_this_frame: bool,
-	is_shift_pressed: bool,
 	tablet_context: Option<TabletContext>,
 	pressure: Option<f64>,
 	canvas: Canvas,
 	mode_stack: ModeStack,
 	last_frame_instant: std::time::Instant,
+	input_monitor: InputMonitor,
 }
 
 impl App {
@@ -152,14 +160,12 @@ impl App {
 			cursor_y: 0.,
 			position,
 			is_cursor_relevant: false,
-			is_cursor_pressed: false,
-			was_cursor_changed_this_frame: false,
-			is_shift_pressed: false,
 			tablet_context,
 			pressure: None,
 			canvas: Canvas::new(),
 			mode_stack: ModeStack::new(Mode::Drawing { current_stroke: None }),
 			last_frame_instant: Instant::now() - Duration::new(1, 0),
+			input_monitor: InputMonitor::new(),
 		}
 	}
 
@@ -178,123 +184,24 @@ impl App {
 			},
 			// Check if a window event has occurred.
 			Event::WindowEvent { ref event, window_id } if window_id == self.window.id() => {
-				// FIXME: This is a little wasteful. Is it feasible to only update if something actually does change on-screen?
-				self.should_redraw = true;
 				match event {
 					// If the titlebar close button is clicked  or the escape key is pressed, exit the loop.
 					WindowEvent::CloseRequested => *control_flow = ControlFlow::Exit,
-					WindowEvent::KeyboardInput {
-						input: KeyboardInput {
-							state: ElementState::Pressed,
-							virtual_keycode: Some(VirtualKeyCode::Escape),
-							..
-						},
-						..
-					} => {
-						self.mode_stack.discard_draft();
+					WindowEvent::KeyboardInput { input, .. } => {
+						self.input_monitor.process_keyboard_input(input);
 					},
-					WindowEvent::KeyboardInput {
-						input: KeyboardInput {
-							state: ElementState::Pressed,
-							virtual_keycode: Some(VirtualKeyCode::Q),
-							..
-						},
-						..
-					} => {
-						for stroke in self.canvas.strokes.iter_mut().filter(|x| x.is_selected) {
-							stroke.is_selected = false;
-						}
+					WindowEvent::MouseInput { state, button: MouseButton::Left, .. } => {
+						self.input_monitor.process_mouse_input(state);
 					},
-					WindowEvent::KeyboardInput {
-						input: KeyboardInput {
-							state: ElementState::Pressed,
-							virtual_keycode: Some(VirtualKeyCode::Z),
-							..
-						},
-						..
-					} => {
-						if !self.is_cursor_pressed {
-							self.canvas.strokes.pop();
-						}
-					},
-					WindowEvent::KeyboardInput {
-						input: KeyboardInput {
-							state: ElementState::Pressed,
-							virtual_keycode: Some(VirtualKeyCode::S),
-							..
-						},
-						..
-					} => {
-						self.mode_stack.switch_select();
-					},
-					WindowEvent::KeyboardInput {
-						input: KeyboardInput {
-							state: ElementState::Pressed,
-							virtual_keycode: Some(VirtualKeyCode::B),
-							..
-						},
-						..
-					} => {
-						self.mode_stack.switch_draw();
-					},
-					WindowEvent::KeyboardInput {
-						input: KeyboardInput {
-							state: ElementState::Pressed,
-							virtual_keycode: Some(VirtualKeyCode::T),
-							..
-						},
-						..
-					} => {
-						self.mode_stack.switch_move();
-					},
-					WindowEvent::KeyboardInput {
-						input: KeyboardInput {
-							state,
-							virtual_keycode: Some(VirtualKeyCode::Space),
-							..
-						},
-						..
-					} => match state {
-						ElementState::Pressed => {
-							if self.mode_stack.transient_mode.is_none() {
-								self.mode_stack.temp_pan(true);
-							}
-						},
-						ElementState::Released => {
-							self.mode_stack.temp_pan(false);
-						},
-					},
-					WindowEvent::KeyboardInput {
-						input: KeyboardInput {
-							state,
-							virtual_keycode: Some(VirtualKeyCode::LShift),
-							..
-						},
-						..
-					} => match state {
-						ElementState::Pressed => {
-							self.is_shift_pressed = true;
-						},
-						ElementState::Released => {
-							self.is_shift_pressed = false;
-						},
-					},
-					WindowEvent::KeyboardInput {
-						input: KeyboardInput {
-							state: ElementState::Pressed,
-							virtual_keycode: Some(VirtualKeyCode::X),
-							..
-						},
-						..
-					} => for _ in self.canvas.strokes.drain_filter(|x| x.is_selected) {},
-
+					WindowEvent::MouseWheel { delta: MouseScrollDelta::LineDelta(lines, rows), .. } => {
+						// Negative multiplier = reverse scrolling; positive multiplier = natural scrolling.
+						self.position[0] = self.position[0] + lines * -48.;
+						self.position[1] = self.position[1] + rows * -48.;
+						self.renderer.reposition(self.position);
+					}
 					WindowEvent::CursorMoved { position, .. } => {
 						self.cursor_x = position.x;
 						self.cursor_y = position.y;
-					},
-					WindowEvent::MouseInput { state, button: MouseButton::Left, .. } => {
-						self.was_cursor_changed_this_frame = self.is_cursor_pressed != (*state == ElementState::Pressed);
-						self.is_cursor_pressed = self.was_cursor_changed_this_frame ^ self.is_cursor_pressed;
 					},
 					WindowEvent::CursorEntered { .. } => {
 						self.is_cursor_relevant = true;
@@ -321,6 +228,7 @@ impl App {
 			// If all other main events have been cleared, poll for tablet events, then reqeust a window redraw.
 			Event::MainEventsCleared => {
 				self.poll_tablet();
+				self.process_input();
 				if self.should_redraw {
 					self.window.request_redraw();
 				}
@@ -380,7 +288,8 @@ impl App {
 	}
 
 	fn poll_tablet(&mut self) {
-		if !self.is_cursor_pressed {
+		use Input::*;
+		if !self.input_monitor.inputs[LMouse].is_active {
 			self.pressure = None;
 		}
 
@@ -391,12 +300,52 @@ impl App {
 		}
 	}
 
-	fn update_renderer(&mut self) {
+	fn process_input(&mut self) {
+		use Input::*;
+
+		if self.input_monitor.is_fresh {
+			use crate::input::Input::*;
+			if self.input_monitor.inputs[B].was_pressed() {
+				self.mode_stack.switch_draw();
+			}
+			if self.input_monitor.inputs[Q].was_pressed() {
+				for stroke in self.canvas.strokes.iter_mut().filter(|x| x.is_selected) {
+					stroke.is_selected = false;
+				}
+			}
+			if self.input_monitor.inputs[S].was_pressed() {
+				self.mode_stack.switch_select();
+			}
+			if self.input_monitor.inputs[T].was_pressed() {
+				self.mode_stack.switch_move();
+			}
+			if self.input_monitor.inputs[X].was_pressed() {
+				for _ in self.canvas.strokes.drain_filter(|x| x.is_selected) {}
+			}
+			if self.input_monitor.inputs[Z].was_emitted() {
+				if self.mode_stack.is_drafting() {
+					self.mode_stack.discard_draft();
+				} else {
+					self.canvas.strokes.pop();
+				}
+			}
+			if self.input_monitor.inputs[Escape].was_pressed() {
+				self.mode_stack.discard_draft();
+			}
+			if self.input_monitor.inputs[Space].is_different {
+				if self.input_monitor.inputs[Space].is_active {
+					self.mode_stack.temp_pan(true);
+				} else {
+					self.mode_stack.temp_pan(false);
+				}
+			}
+		}
+
 		match self.mode_stack.get_mut() {
 			Mode::Drawing { current_stroke } => {
 				self.window.set_cursor_icon(winit::window::CursorIcon::Arrow);
-				if self.is_cursor_pressed {
-					if self.was_cursor_changed_this_frame && current_stroke.is_none() {
+				if self.input_monitor.inputs[LMouse].is_active {
+					if self.input_monitor.inputs[LMouse].is_different && current_stroke.is_none() {
 						*current_stroke = Some(Stroke::new());
 					}
 
@@ -410,8 +359,8 @@ impl App {
 			Mode::Selecting { origin } => {
 				self.window.set_cursor_icon(winit::window::CursorIcon::Crosshair);
 
-				if self.is_cursor_pressed {
-					if self.was_cursor_changed_this_frame && origin.is_none() {
+				if self.input_monitor.inputs[LMouse].is_active {
+					if self.input_monitor.inputs[LMouse].is_different && origin.is_none() {
 						*origin = Some(Vec2::from(self.position) + Vec2::new(self.cursor_x, self.cursor_y).as_::<f32>());
 					}
 				} else {
@@ -419,12 +368,12 @@ impl App {
 						let current = Vec2::<f32>::from(self.position) + Vec2::new(self.cursor_x, self.cursor_y).as_::<f32>();
 						let min = Vec2::new(current.x.min(origin.x), current.y.min(origin.y));
 						let max = Vec2::new(current.x.max(origin.x), current.y.max(origin.y));
-						self.canvas.select(min, max, self.is_shift_pressed);
+						self.canvas.select(min, max, self.input_monitor.inputs[LShift].is_active);
 					}
 				}
 			},
 			Mode::Panning { origin } => {
-				if self.is_cursor_pressed {
+				if self.input_monitor.inputs[LMouse].is_active {
 					self.window.set_cursor_icon(winit::window::CursorIcon::Grabbing);
 					// TODO: We ignore was_cursor_changed_this_frame; figure out a consistent, intuitive standard across modes.
 					if origin.is_none() {
@@ -448,8 +397,8 @@ impl App {
 			Mode::Moving { origin } => {
 				self.window.set_cursor_icon(winit::window::CursorIcon::Move);
 
-				if self.is_cursor_pressed {
-					if self.was_cursor_changed_this_frame && origin.is_none() {
+				if self.input_monitor.inputs[LMouse].is_active {
+					if self.input_monitor.inputs[LMouse].is_different && origin.is_none() {
 						*origin = Some(Vec2::from(self.position) + Vec2::new(self.cursor_x, self.cursor_y).as_::<f32>());
 					}
 				} else {
@@ -464,14 +413,19 @@ impl App {
 			},
 		}
 
+		// FIXME: This is a little wasteful. Is it feasible to only update if something actually does change on-screen?
+		self.should_redraw = true;
+		
+		// Reset inputs.
+		self.input_monitor.defresh();
+	}
+
+	fn update_renderer(&mut self) {
 		// Apply a resize if necessary; resizes are time-intensive.
 		if let Some(size) = self.pending_resize.take() {
 			self.renderer.resize(size.width, size.height);
 		}
 
 		self.renderer.update();
-
-		// Reset inputs.
-		self.was_cursor_changed_this_frame = false;
 	}
 }

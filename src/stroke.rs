@@ -87,7 +87,7 @@ impl Canvas {
 				indices.extend([0, 2, 3, 0, 3, 1].map(|n| current_index + n));
 			}
 
-			for (i, ([_, b, _], [p, q])) in stroke.points.array_windows::<3>().zip(perpendiculars.array_windows::<2>()).enumerate() {
+			for (i, [p, q]) in perpendiculars.array_windows::<2>().enumerate() {
 				let i = u16::try_from(i).unwrap();
 				let cross_product = p.x * q.y - p.y * q.x;
 
