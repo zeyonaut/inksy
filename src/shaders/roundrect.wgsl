@@ -54,5 +54,5 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
 	let rect_vertex = vec2(0.5, 0.5) * in.dimensions + vec2(-in.radius);
 	let rect_center = vec2(in.radius) + in.sposition + rect_vertex;
 	let frag_position = in.position.xy - rect_center;
-	return vec4(in.color.rgb, in.color.a * (1.0 - smoothstep(0.0, 1.0, length(max(abs(frag_position), rect_vertex) - rect_vertex) - in.radius)));
+	return vec4(in.color.rgb, in.color.a * (1.0 - smoothstep(0.0, 1. / sqrt(2.), length(max(abs(frag_position), rect_vertex) - rect_vertex) - in.radius)));
 }

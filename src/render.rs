@@ -20,10 +20,17 @@ use crate::{
 
 const MAX_FRAME_RATE: u16 = 60;
 
-enum DrawCommand {
-	Card { position: [u32; 2], dimensions: [u32; 2], color: [u8; 4], radius: u32 },
-	Triangle { vertices: [u32; 3] },
-	Text { string: String },
+pub enum DrawCommand {
+	Trimesh { vertices: Vec<Vertex>, indices: Vec<u16> },
+	Card { position: [f32; 2], dimensions: [f32; 2], color: [u8; 4], radius: f32 },
+	ColorSelector { position: [f32; 2], hsv: [f32; 3], trigon_radius: f32, hole_radius: f32, ring_width: f32 },
+}
+
+pub enum RenderCommand {
+	Trimesh(Range<u32>),
+	Card(Range<u32>),
+	ColorRing(Range<u32>),
+	ColorTrigon(Range<u32>),
 }
 
 // This struct stores the data of each vertex to be rendered.
@@ -79,7 +86,7 @@ impl CardInstance {
 
 #[repr(C)]
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
-pub struct ColorWheelInstance {
+pub struct ColorRingInstance {
 	pub position: [f32; 2],
 	pub radius_major: f32,
 	pub radius_minor: f32,
@@ -87,7 +94,7 @@ pub struct ColorWheelInstance {
 	pub saturation_value: [f32; 2],
 }
 
-impl ColorWheelInstance {
+impl ColorRingInstance {
 	const ATTRIBUTES: [wgpu::VertexAttribute; 5] = wgpu::vertex_attr_array![0 => Float32x2, 1 => Float32, 2 => Float32, 3 => Float32, 4 => Float32x2];
 
 	// Returns the layout of buffers composed of instances of Self.
@@ -102,14 +109,14 @@ impl ColorWheelInstance {
 
 #[repr(C)]
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
-pub struct SaturationValuePlotInstance {
+pub struct ColorTrigonInstance {
 	pub position: [f32; 2],
 	pub radius: f32,
 	pub hue: f32,
 	pub depth: f32,
 }
 
-impl SaturationValuePlotInstance {
+impl ColorTrigonInstance {
 	const ATTRIBUTES: [wgpu::VertexAttribute; 4] = wgpu::vertex_attr_array![0 => Float32x2, 1 => Float32, 2 => Float32, 3 => Float32];
 
 	// Returns the layout of buffers composed of instances of Self.
@@ -135,15 +142,15 @@ pub struct Renderer {
 	pub clear_color: wgpu::Color,
 	viewport_buffer: wgpu::Buffer,
 	viewport_bind_group: wgpu::BindGroup,
-	render_pipeline: wgpu::RenderPipeline,
-	rect_render_pipeline: wgpu::RenderPipeline,
-	colorwheel_render_pipeline: wgpu::RenderPipeline,
-	saturation_value_plot_render_pipeline: wgpu::RenderPipeline,
-	strokes_vertex_buffer: DynamicBuffer<Vertex>,
-	strokes_index_buffer: DynamicBuffer<u16>,
-	selections_vertex_buffer: DynamicBuffer<CardInstance>,
-	colorwheel_vertex_buffer: DynamicBuffer<ColorWheelInstance>,
-	saturation_value_plot_instance_buffer: DynamicBuffer<SaturationValuePlotInstance>,
+	trimesh_render_pipeline: wgpu::RenderPipeline,
+	trimesh_vertex_buffer: DynamicBuffer<Vertex>,
+	trimesh_index_buffer: DynamicBuffer<u16>,
+	card_render_pipeline: wgpu::RenderPipeline,
+	card_instance_buffer: DynamicBuffer<CardInstance>,
+	color_ring_render_pipeline: wgpu::RenderPipeline,
+	color_ring_instance_buffer: DynamicBuffer<ColorRingInstance>,
+	color_trigon_render_pipeline: wgpu::RenderPipeline,
+	color_trigon_instance_buffer: DynamicBuffer<ColorTrigonInstance>,
 	rect_index_buffer: wgpu::Buffer,
 	rect_index_range: Range<u32>,
 }
@@ -217,7 +224,7 @@ impl Renderer {
 		});
 
 		// We create a render pipeline from the vertex and fragment shaders.
-		let render_pipeline = {
+		let trimesh_render_pipeline = {
 			let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
 				label: Some("shader"),
 				source: wgpu::ShaderSource::Wgsl(include_str!("shaders/shader.wgsl").into()),
@@ -266,7 +273,7 @@ impl Renderer {
 			})
 		};
 
-		let rect_render_pipeline = {
+		let card_render_pipeline = {
 			let rect_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
 				label: Some("rect_shader"),
 				source: wgpu::ShaderSource::Wgsl(include_str!("shaders/roundrect.wgsl").into()),
@@ -315,7 +322,7 @@ impl Renderer {
 			})
 		};
 
-		let colorwheel_render_pipeline = {
+		let color_ring_render_pipeline = {
 			let colorwheel_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
 				label: Some("colorwheel_shader"),
 				source: wgpu::ShaderSource::Wgsl(include_str!("shaders/colorwheel.wgsl").into()),
@@ -334,7 +341,7 @@ impl Renderer {
 				vertex: wgpu::VertexState {
 					module: &colorwheel_shader,
 					entry_point: "vs_main",
-					buffers: &[ColorWheelInstance::buffer_layout()],
+					buffers: &[ColorRingInstance::buffer_layout()],
 				},
 				fragment: Some(wgpu::FragmentState {
 					module: &colorwheel_shader,
@@ -364,7 +371,7 @@ impl Renderer {
 			})
 		};
 
-		let saturation_value_plot_render_pipeline = {
+		let color_trigon_render_pipeline = {
 			let saturation_value_plot_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
 				label: Some("saturation_value_plot_shader"),
 				source: wgpu::ShaderSource::Wgsl(include_str!("shaders/saturation_value_plot.wgsl").into()),
@@ -383,7 +390,7 @@ impl Renderer {
 				vertex: wgpu::VertexState {
 					module: &saturation_value_plot_shader,
 					entry_point: "vs_main",
-					buffers: &[SaturationValuePlotInstance::buffer_layout()],
+					buffers: &[ColorTrigonInstance::buffer_layout()],
 				},
 				fragment: Some(wgpu::FragmentState {
 					module: &saturation_value_plot_shader,
@@ -431,11 +438,11 @@ impl Renderer {
 			label: Some("viewport_bind_group"),
 		});
 
-		let strokes_vertex_buffer = DynamicBuffer::<Vertex>::new(&device, wgpu::BufferUsages::VERTEX, 1 << 16);
-		let strokes_index_buffer = DynamicBuffer::<u16>::new(&device, wgpu::BufferUsages::INDEX, 1 << 16);
-		let selections_vertex_buffer = DynamicBuffer::<CardInstance>::new(&device, wgpu::BufferUsages::VERTEX, 1 << 0);
-		let colorwheel_vertex_buffer = DynamicBuffer::<ColorWheelInstance>::new(&device, wgpu::BufferUsages::VERTEX, 1 << 0);
-		let saturation_value_plot_instance_buffer = DynamicBuffer::<SaturationValuePlotInstance>::new(&device, wgpu::BufferUsages::VERTEX, 1 << 0);
+		let trimesh_vertex_buffer = DynamicBuffer::<Vertex>::new(&device, wgpu::BufferUsages::VERTEX, 1 << 16);
+		let trimesh_index_buffer = DynamicBuffer::<u16>::new(&device, wgpu::BufferUsages::INDEX, 1 << 16);
+		let card_instance_buffer = DynamicBuffer::<CardInstance>::new(&device, wgpu::BufferUsages::VERTEX, 1 << 0);
+		let color_ring_instance_buffer = DynamicBuffer::<ColorRingInstance>::new(&device, wgpu::BufferUsages::VERTEX, 1 << 0);
+		let color_trigon_instance_buffer = DynamicBuffer::<ColorTrigonInstance>::new(&device, wgpu::BufferUsages::VERTEX, 1 << 0);
 
 		// This index buffer will be used for any roundrect and colorwheel draw calls.
 		const RECT_INDICES: &[u16] = &[0, 1, 2, 0, 2, 3];
@@ -460,15 +467,15 @@ impl Renderer {
 			clear_color: wgpu::Color::BLACK,
 			viewport_buffer,
 			viewport_bind_group,
-			render_pipeline,
-			rect_render_pipeline,
-			colorwheel_render_pipeline,
-			saturation_value_plot_render_pipeline,
-			strokes_vertex_buffer,
-			strokes_index_buffer,
-			selections_vertex_buffer,
-			colorwheel_vertex_buffer,
-			saturation_value_plot_instance_buffer,
+			trimesh_render_pipeline,
+			trimesh_vertex_buffer,
+			trimesh_index_buffer,
+			card_render_pipeline,
+			card_instance_buffer,
+			color_ring_render_pipeline,
+			color_ring_instance_buffer,
+			color_trigon_render_pipeline,
+			color_trigon_instance_buffer,
 			rect_index_buffer,
 			rect_index_range,
 		}
@@ -496,14 +503,7 @@ impl Renderer {
 
 	pub fn update(&mut self) {}
 
-	pub fn render(
-		&mut self,
-		selection_card_instances: &[CardInstance],
-		strokes_vertices: Vec<Vertex>,
-		strokes_indices: Vec<u16>,
-		colorwheel_instances: Vec<ColorWheelInstance>,
-		saturation_value_plot_instances: Vec<SaturationValuePlotInstance>,
-	) -> Result<(), wgpu::SurfaceError> {
+	pub fn render(&mut self, draw_commands: Vec<DrawCommand>) -> Result<(), wgpu::SurfaceError> {
 		if self.is_pending_resize {
 			// We write the new size to the viewport buffer.
 			self.queue.write_buffer(
@@ -517,14 +517,70 @@ impl Renderer {
 			self.is_pending_resize = false;
 		}
 
-		let strokes_index_range = 0..strokes_indices.len() as u32;
+		let mut strokes_vertices: Vec<Vertex> = vec![];
+		let mut strokes_indices: Vec<u16> = vec![];
+		let mut card_instances: Vec<CardInstance> = vec![];
+		let mut color_ring_instances: Vec<ColorRingInstance> = vec![];
+		let mut color_trigon_instances: Vec<ColorTrigonInstance> = vec![];
 
-		self.strokes_vertex_buffer.write(&self.device, &self.queue, strokes_vertices, Vertex { position: [0.; 3], color: [0.; 4] });
-		self.strokes_index_buffer.write(&self.device, &self.queue, strokes_indices, 0);
-		self.selections_vertex_buffer.write(
+		let mut render_commands: Vec<RenderCommand> = vec![];
+
+		for draw_command in draw_commands {
+			match draw_command {
+				DrawCommand::Trimesh { mut vertices, indices } => {
+					let vertex_start = strokes_vertices.len() as u16;
+					let index_start = strokes_indices.len() as u32;
+					strokes_vertices.append(&mut vertices);
+					strokes_indices.extend(indices.into_iter().map(|i| vertex_start + i));
+					render_commands.push(RenderCommand::Trimesh(index_start..strokes_indices.len() as u32));
+				},
+				DrawCommand::Card { position, dimensions, color, radius } => {
+					let instance_start = card_instances.len() as u32;
+					card_instances.push(CardInstance {
+						position,
+						dimensions,
+						color: color.map(srgb8_to_f32),
+						depth: 0.,
+						radius,
+					});
+					render_commands.push(RenderCommand::Card(instance_start..instance_start + 1));
+				},
+				DrawCommand::ColorSelector {
+					position,
+					hsv,
+					trigon_radius,
+					hole_radius,
+					ring_width,
+				} => {
+					let ring_instance_start = color_ring_instances.len() as u32;
+					color_ring_instances.push(ColorRingInstance {
+						position,
+						radius_major: hole_radius + ring_width,
+						radius_minor: hole_radius,
+						depth: 0.,
+						saturation_value: [hsv[1], hsv[2]],
+					});
+					render_commands.push(RenderCommand::ColorRing(ring_instance_start..ring_instance_start + 1));
+
+					let trigon_instance_start = color_trigon_instances.len() as u32;
+					color_trigon_instances.push(ColorTrigonInstance {
+						position: position.map(|n| n + ring_width + hole_radius - trigon_radius),
+						radius: trigon_radius,
+						hue: hsv[0],
+						depth: 0.,
+					});
+					render_commands.push(RenderCommand::ColorTrigon(trigon_instance_start..trigon_instance_start + 1));
+				},
+			}
+		}
+
+		self.trimesh_vertex_buffer.write(&self.device, &self.queue, strokes_vertices, Vertex { position: [0.; 3], color: [0.; 4] });
+		self.trimesh_index_buffer.write(&self.device, &self.queue, strokes_indices, 0);
+
+		self.card_instance_buffer.write(
 			&self.device,
 			&self.queue,
-			selection_card_instances.to_vec(),
+			card_instances,
 			CardInstance {
 				position: [0.; 2],
 				dimensions: [0.; 2],
@@ -533,12 +589,12 @@ impl Renderer {
 				radius: 0.,
 			},
 		);
-		let colorwheel_instance_range = 0..colorwheel_instances.len() as u32;
-		self.colorwheel_vertex_buffer.write(
+
+		self.color_ring_instance_buffer.write(
 			&self.device,
 			&self.queue,
-			colorwheel_instances,
-			ColorWheelInstance {
+			color_ring_instances,
+			ColorRingInstance {
 				position: [0.; 2],
 				radius_major: 0.,
 				radius_minor: 0.,
@@ -547,12 +603,11 @@ impl Renderer {
 			},
 		);
 
-		let saturation_value_plot_instance_range = 0..saturation_value_plot_instances.len() as u32;
-		self.saturation_value_plot_instance_buffer.write(
+		self.color_trigon_instance_buffer.write(
 			&self.device,
 			&self.queue,
-			saturation_value_plot_instances,
-			SaturationValuePlotInstance {
+			color_trigon_instances,
+			ColorTrigonInstance {
 				position: [0.; 2],
 				radius: 0.,
 				hue: 0.,
@@ -583,27 +638,34 @@ impl Renderer {
 		});
 
 		render_pass.set_bind_group(0, &self.viewport_bind_group, &[]);
-
-		// We activate our pipeline and supply a single vertex buffer, as promised.
-		render_pass.set_pipeline(&self.render_pipeline);
-		render_pass.set_vertex_buffer(0, self.strokes_vertex_buffer.buffer.slice(..));
-		render_pass.set_index_buffer(self.strokes_index_buffer.buffer.slice(..), wgpu::IndexFormat::Uint16);
-		render_pass.draw_indexed(strokes_index_range.clone(), 0, 0..1);
-
-		render_pass.set_pipeline(&self.rect_render_pipeline);
-		render_pass.set_vertex_buffer(0, self.selections_vertex_buffer.buffer.slice(..));
-		render_pass.set_index_buffer(self.rect_index_buffer.slice(..), wgpu::IndexFormat::Uint16);
-		render_pass.draw_indexed(self.rect_index_range.clone(), 0, 0..selection_card_instances.len() as u32);
-
-		render_pass.set_pipeline(&self.colorwheel_render_pipeline);
-		render_pass.set_vertex_buffer(0, self.colorwheel_vertex_buffer.buffer.slice(..));
-		render_pass.set_index_buffer(self.rect_index_buffer.slice(..), wgpu::IndexFormat::Uint16);
-		render_pass.draw_indexed(self.rect_index_range.clone(), 0, colorwheel_instance_range);
-
-		render_pass.set_pipeline(&self.saturation_value_plot_render_pipeline);
-		render_pass.set_vertex_buffer(0, self.saturation_value_plot_instance_buffer.buffer.slice(..));
-		render_pass.set_index_buffer(self.rect_index_buffer.slice(..), wgpu::IndexFormat::Uint16);
-		render_pass.draw_indexed(self.rect_index_range.clone(), 0, saturation_value_plot_instance_range);
+		for render_command in render_commands {
+			match render_command {
+				RenderCommand::Trimesh(index_range) => {
+					render_pass.set_pipeline(&self.trimesh_render_pipeline);
+					render_pass.set_vertex_buffer(0, self.trimesh_vertex_buffer.buffer.slice(..));
+					render_pass.set_index_buffer(self.trimesh_index_buffer.buffer.slice(..), wgpu::IndexFormat::Uint16);
+					render_pass.draw_indexed(index_range, 0, 0..1);
+				},
+				RenderCommand::Card(instance_range) => {
+					render_pass.set_pipeline(&self.card_render_pipeline);
+					render_pass.set_vertex_buffer(0, self.card_instance_buffer.buffer.slice(..));
+					render_pass.set_index_buffer(self.rect_index_buffer.slice(..), wgpu::IndexFormat::Uint16);
+					render_pass.draw_indexed(self.rect_index_range.clone(), 0, instance_range);
+				},
+				RenderCommand::ColorRing(instance_range) => {
+					render_pass.set_pipeline(&self.color_ring_render_pipeline);
+					render_pass.set_vertex_buffer(0, self.color_ring_instance_buffer.buffer.slice(..));
+					render_pass.set_index_buffer(self.rect_index_buffer.slice(..), wgpu::IndexFormat::Uint16);
+					render_pass.draw_indexed(self.rect_index_range.clone(), 0, instance_range);
+				},
+				RenderCommand::ColorTrigon(instance_range) => {
+					render_pass.set_pipeline(&self.color_trigon_render_pipeline);
+					render_pass.set_vertex_buffer(0, self.color_trigon_instance_buffer.buffer.slice(..));
+					render_pass.set_index_buffer(self.rect_index_buffer.slice(..), wgpu::IndexFormat::Uint16);
+					render_pass.draw_indexed(self.rect_index_range.clone(), 0, instance_range);
+				},
+			}
+		}
 
 		drop(render_pass);
 

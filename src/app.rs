@@ -20,7 +20,7 @@ use winit::{
 
 use crate::{
 	input::{Input, InputMonitor},
-	render::{CardInstance, ColorWheelInstance, Renderer, SaturationValuePlotInstance},
+	render::{CardInstance, ColorRingInstance, ColorTrigonInstance, DrawCommand, Renderer},
 	stroke::{Canvas, Stroke},
 	wintab::*,
 };
@@ -132,6 +132,12 @@ impl ModeStack {
 		}
 	}
 }
+
+// TODO: Move this somewhere saner.
+// Color selector constants
+const TRIGON_RADIUS: f32 = 102.;
+const HOLE_RADIUS: f32 = 120.;
+const RING_WIDTH: f32 = 42.;
 
 // Current state of our app.
 pub struct App {
@@ -295,49 +301,104 @@ impl App {
 	}
 
 	fn repaint(&mut self) -> Result<(), wgpu::SurfaceError> {
-		// FIXME: Check if selecting in transient mode first.
-		let card_instances = if let Mode::Selecting { origin: Some(origin) } = &self.mode_stack.base_mode {
-			let current = Vec2::<f32>::from(self.position) + Vec2::new(self.cursor_x, self.cursor_y).as_::<f32>();
-			vec![CardInstance {
-				position: [current.x.min(origin.x), current.y.min(origin.y)],
-				dimensions: [(current.x - origin.x).abs(), (current.y - origin.y).abs()],
-				color: [0x22, 0xae, 0xd1, 0x33].map(srgb8_to_f32),
-				depth: 0.,
-				radius: 0.,
-			}]
-		} else {
-			vec![]
-		};
+		let mut draw_commands = vec![];
 
-		let (colorwheel_instances, saturation_value_plot_instances) = if let Mode::ChoosingColor { cursor_origin, .. } = self.mode_stack.get() {
-			(
-				vec![ColorWheelInstance {
-					position: (cursor_origin - 160.).into_array(),
-					radius_major: 160.,
-					radius_minor: 120.,
-					depth: 0.,
-					saturation_value: [self.current_color[1], self.current_color[2]],
-				}],
-				vec![SaturationValuePlotInstance {
-					position: (cursor_origin - 119.).into_array(),
-					radius: 119.,
-					hue: self.current_color[0],
-					depth: 0.,
-				}],
-			)
-		} else {
-			(vec![], vec![])
-		};
-
+		// Draw brushstrokes.
 		let selection_offset = if let Mode::Moving { origin: Some(origin) } = &self.mode_stack.base_mode {
 			Some(Vec2::from(self.position) + Vec2::new(self.cursor_x, self.cursor_y).as_::<f32>() - *origin)
 		} else {
 			None
 		};
-
 		let (strokes_vertices, strokes_indices) = self.canvas.bake(self.mode_stack.current_stroke(), selection_offset);
+		draw_commands.push(DrawCommand::Trimesh {
+			vertices: strokes_vertices,
+			indices: strokes_indices,
+		});
 
-		self.renderer.render(&card_instances, strokes_vertices, strokes_indices, colorwheel_instances, saturation_value_plot_instances)
+		// Draw selection rectangles.
+		// FIXME: Check if selecting in transient mode first.
+		if let Mode::Selecting { origin: Some(origin) } = &self.mode_stack.base_mode {
+			let current = Vec2::<f32>::from(self.position) + Vec2::new(self.cursor_x, self.cursor_y).as_::<f32>();
+			draw_commands.push(DrawCommand::Card {
+				position: [current.x.min(origin.x), current.y.min(origin.y)],
+				dimensions: [(current.x - origin.x).abs(), (current.y - origin.y).abs()],
+				color: [0x22, 0xae, 0xd1, 0x33],
+				radius: 0.,
+			});
+		}
+
+		// Draw color selector.
+		if let Mode::ChoosingColor { cursor_origin, .. } = self.mode_stack.get() {
+			draw_commands.push(DrawCommand::ColorSelector {
+				position: (cursor_origin - HOLE_RADIUS - RING_WIDTH).into_array(),
+				hsv: self.current_color,
+				trigon_radius: TRIGON_RADIUS,
+				hole_radius: HOLE_RADIUS,
+				ring_width: RING_WIDTH,
+			});
+
+			let srgb = hsv_to_srgb(self.current_color[0], self.current_color[1], self.current_color[2]).map(|n| if n >= 1.0 { 255 } else { (n * 256.) as u8 });
+			let srgba = [srgb[0], srgb[1], srgb[2], 0xff];
+
+			let ring_position = cursor_origin
+				+ Vec2::new(
+					(HOLE_RADIUS + RING_WIDTH / 2.) * -(self.current_color[0] * 2. * core::f32::consts::PI).cos(),
+					(HOLE_RADIUS + RING_WIDTH / 2.) * -(self.current_color[0] * 2. * core::f32::consts::PI).sin(),
+				);
+
+			let hue_outline_width = RING_WIDTH + 12.;
+			let hue_frame_width = RING_WIDTH + 6.;
+			let hue_window_width = RING_WIDTH;
+			draw_commands.push(DrawCommand::Card {
+				position: (ring_position - hue_outline_width / 2. + self.position).into_array(),
+				dimensions: [hue_outline_width; 2],
+				color: [0xff; 4],
+				radius: hue_outline_width / 2.,
+			});
+			draw_commands.push(DrawCommand::Card {
+				position: (ring_position - hue_frame_width / 2. + self.position).into_array(),
+				dimensions: [hue_frame_width; 2],
+				color: [0x00, 0x00, 0x00, 0xff],
+				radius: hue_frame_width / 2.,
+			});
+			draw_commands.push(DrawCommand::Card {
+				position: (ring_position - hue_window_width / 2. + self.position).into_array(),
+				dimensions: [hue_window_width; 2],
+				color: srgba,
+				radius: hue_window_width / 2.,
+			});
+
+			let trigon_position = cursor_origin
+				+ TRIGON_RADIUS
+					* Vec2::new(
+						3.0f32.sqrt() * (self.current_color[2] - 0.5 * (self.current_color[1] * self.current_color[2] + 1.)),
+						0.5 * (1. - 3. * self.current_color[1] * self.current_color[2]),
+					);
+
+			let sv_window_width = 12.;
+			let sv_outline_width = sv_window_width + 12.;
+			let sv_frame_width = sv_window_width + 6.;
+			draw_commands.push(DrawCommand::Card {
+				position: (trigon_position - sv_outline_width / 2. + self.position).into_array(),
+				dimensions: [sv_outline_width; 2],
+				color: [0xff; 4],
+				radius: sv_outline_width / 2.,
+			});
+			draw_commands.push(DrawCommand::Card {
+				position: (trigon_position - sv_frame_width / 2. + self.position).into_array(),
+				dimensions: [sv_frame_width; 2],
+				color: [0x00, 0x00, 0x00, 0xff],
+				radius: sv_frame_width / 2.,
+			});
+			draw_commands.push(DrawCommand::Card {
+				position: (trigon_position - sv_window_width / 2. + self.position).into_array(),
+				dimensions: [sv_window_width; 2],
+				color: srgba,
+				radius: sv_window_width / 2.,
+			});
+		}
+
+		self.renderer.render(draw_commands)
 	}
 
 	fn poll_tablet(&mut self) {
@@ -483,12 +544,11 @@ impl App {
 				if self.input_monitor.inputs[LMouse].is_active {
 					let cursor = Vec2::new(self.cursor_x as f32, self.cursor_y as f32);
 					let vector = cursor - *cursor_origin;
-					let triangle_radius = 119.;
 					if part.is_none() && self.input_monitor.inputs[LMouse].is_different {
 						let magnitude = vector.magnitude();
-						if magnitude >= 120. && magnitude <= 160. {
+						if magnitude >= HOLE_RADIUS && magnitude <= HOLE_RADIUS + RING_WIDTH {
 							*part = Some(ColorSelectionPart::Hue);
-						} else if 2. * vector.y < triangle_radius && -(3.0f32.sqrt()) * vector.x - vector.y < triangle_radius && (3.0f32.sqrt()) * vector.x - vector.y < triangle_radius {
+						} else if 2. * vector.y < TRIGON_RADIUS && -(3.0f32.sqrt()) * vector.x - vector.y < TRIGON_RADIUS && (3.0f32.sqrt()) * vector.x - vector.y < TRIGON_RADIUS {
 							*part = Some(ColorSelectionPart::SaturationValue);
 						}
 					}
@@ -498,12 +558,13 @@ impl App {
 							self.current_color[0] = vector.y.atan2(vector.x) / (2.0 * std::f32::consts::PI) + 0.5;
 						},
 						Some(ColorSelectionPart::SaturationValue) => {
-							let scaled_vector = vector / triangle_radius;
+							let scaled_vector = vector / TRIGON_RADIUS;
 							let other = Vec2::new(-(3.0f32.sqrt()) / 2., -1. / 2.);
 							let dot = other.dot(scaled_vector);
 							let scaled_vector = scaled_vector + ((dot - dot.min(0.5)) * -other);
 							let scaled_vector = Vec2::new(scaled_vector.x.max(-3.0f32.sqrt() / 2.), scaled_vector.y.min(0.5));
-							self.current_color[1] = (1. - 2. * scaled_vector.y) / (2. + 3.0f32.sqrt() * scaled_vector.x - scaled_vector.y);
+							let s = (1. - 2. * scaled_vector.y) / (2. + 3.0f32.sqrt() * scaled_vector.x - scaled_vector.y);
+							self.current_color[1] = if s.is_nan() { 0. } else { s.clamp(0., 1.) };
 							self.current_color[2] = ((2. + 3.0f32.sqrt() * scaled_vector.x - scaled_vector.y) / 3.).clamp(0., 1.);
 						},
 						None => {},
