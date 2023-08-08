@@ -5,11 +5,11 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-use enum_map::{enum_map, Enum, EnumMap};
+use enumset::{EnumSet, EnumSetType};
 use winit::event::{ElementState, KeyboardInput};
 
-#[derive(Enum, Copy, Clone)]
-pub enum Input {
+#[derive(EnumSetType)]
+pub enum Key {
 	K0,
 	K1,
 	K2,
@@ -49,43 +49,33 @@ pub enum Input {
 	Escape,
 	Space,
 	Tab,
-	LMouse,
+	LControl,
 	LShift,
 }
 
-pub struct InputState {
-	pub is_active: bool,
-	pub is_fresh: bool,
-	pub is_different: bool,
-}
-
-impl InputState {
-	pub const fn new() -> Self {
-		Self {
-			is_active: false,
-			is_fresh: false,
-			is_different: false,
-		}
-	}
-
-	pub fn was_emitted(&self) -> bool {
-		self.is_active && self.is_fresh
-	}
-
-	pub fn was_pressed(&self) -> bool {
-		self.is_active && self.is_different
-	}
+#[derive(EnumSetType)]
+pub enum Button {
+	Left,
+	Right,
 }
 
 pub struct InputMonitor {
-	pub inputs: EnumMap<Input, InputState>,
+	pub active_keys: EnumSet<Key>,
+	pub fresh_keys: EnumSet<Key>,
+	pub different_keys: EnumSet<Key>,
+	pub active_buttons: EnumSet<Button>,
+	pub different_buttons: EnumSet<Button>,
 	pub is_fresh: bool,
 }
 
 impl InputMonitor {
 	pub fn new() -> Self {
 		Self {
-			inputs: enum_map! {_ => InputState::new()},
+			active_keys: EnumSet::EMPTY,
+			fresh_keys: EnumSet::EMPTY,
+			different_keys: EnumSet::EMPTY,
+			active_buttons: EnumSet::EMPTY,
+			different_buttons: EnumSet::EMPTY,
 			is_fresh: false,
 		}
 	}
@@ -93,8 +83,8 @@ impl InputMonitor {
 	pub fn process_keyboard_input(&mut self, keyboard_input: &KeyboardInput) {
 		if let Some(keycode) = keyboard_input.virtual_keycode {
 			use winit::event::VirtualKeyCode;
-			use Input::*;
-			let input = match keycode {
+			use Key::*;
+			let key = match keycode {
 				VirtualKeyCode::Key1 => K0,
 				VirtualKeyCode::Key2 => K1,
 				VirtualKeyCode::Key3 => K2,
@@ -135,30 +125,65 @@ impl InputMonitor {
 				VirtualKeyCode::Space => Space,
 				VirtualKeyCode::Tab => Tab,
 				VirtualKeyCode::LShift => LShift,
+				VirtualKeyCode::LControl => LControl,
 				_ => return,
 			};
 			let is_active = keyboard_input.state == ElementState::Pressed;
-			self.inputs[input].is_fresh = true;
-			self.inputs[input].is_different = self.inputs[input].is_active != is_active;
-			self.inputs[input].is_active = is_active;
-			self.is_fresh = true;
+			self.fresh_keys.insert(key);
+			if self.active_keys.contains(key) != is_active {
+				self.different_keys.insert(key);
+			}
+			if is_active {
+				self.active_keys.insert(key);
+			} else {
+				self.active_keys.remove(key);
+			}
 		}
+		self.is_fresh = true;
 	}
 
 	pub fn process_mouse_input(&mut self, element_state: &ElementState) {
-		use Input::*;
+		use Button::*;
 		let is_active = *element_state == ElementState::Pressed;
-		self.inputs[LMouse].is_fresh = true;
-		self.inputs[LMouse].is_different = self.inputs[LMouse].is_active != is_active;
-		self.inputs[LMouse].is_active = is_active;
+		if self.active_buttons.contains(Left) != is_active {
+			self.different_buttons.insert(Left);
+		}
+		if is_active {
+			self.active_buttons.insert(Left);
+		} else {
+			self.active_buttons.remove(Left);
+		}
 		self.is_fresh = true;
 	}
 
 	pub fn defresh(&mut self) {
-		self.inputs.iter_mut().for_each(|(_, input_state)| {
-			input_state.is_fresh = false;
-			input_state.is_different = false
-		});
+		self.fresh_keys = EnumSet::EMPTY;
+		self.different_keys = EnumSet::EMPTY;
+		self.different_buttons = EnumSet::EMPTY;
 		self.is_fresh = false;
+	}
+
+	// Returns true iff the given keystroke was triggered since the last defresh.
+	pub fn should_trigger(&self, modifiers: impl Into<EnumSet<Key>>, triggers: impl Into<EnumSet<Key>>) -> bool {
+		let triggers = triggers.into();
+		(modifiers.into().union(triggers) == self.active_keys) && !self.different_keys.is_empty() && self.different_keys.is_subset(triggers)
+	}
+
+	// Returns true iff the given keystroke was (re)triggered since the last defresh.
+	pub fn should_retrigger(&self, modifiers: impl Into<EnumSet<Key>>, triggers: impl Into<EnumSet<Key>>) -> bool {
+		let triggers = triggers.into();
+		(modifiers.into().union(triggers) == self.active_keys) && !self.fresh_keys.is_empty() && self.fresh_keys.is_subset(triggers)
+	}
+
+	// Return true iff the given keystroke was "discovered" since the last defresh.
+	// A keystroke can be discovered multiple times before it is undiscovered.
+	pub fn was_discovered(&self, modifiers: impl Into<EnumSet<Key>>, triggers: impl Into<EnumSet<Key>>) -> bool {
+		let triggers = triggers.into();
+		(modifiers.into().union(triggers) == self.active_keys) && !self.different_keys.is_empty() && (self.different_keys.is_subset(triggers) || !self.active_keys.complement().intersection(self.different_keys).is_empty())
+	}
+
+	pub fn was_undiscovered(&self, modifiers: impl Into<EnumSet<Key>>, triggers: impl Into<EnumSet<Key>>) -> bool {
+		let wanted_keys = modifiers.into().union(triggers.into());
+		!wanted_keys.is_subset(self.active_keys) && wanted_keys.is_subset(self.active_keys.symmetrical_difference(self.different_keys))
 	}
 }

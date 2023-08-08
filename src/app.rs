@@ -7,9 +7,9 @@
 
 use std::time::{Duration, Instant};
 
-use env_logger::fmt::Color;
+use enumset::EnumSet;
 use fast_srgb8::srgb8_to_f32;
-use vek::{Vec2, Vec3};
+use vek::Vec2;
 use winit::dpi::{PhysicalPosition, PhysicalSize};
 #[cfg(target_os = "windows")]
 use winit::{
@@ -19,8 +19,8 @@ use winit::{
 };
 
 use crate::{
-	input::{Input, InputMonitor},
-	render::{CardInstance, ColorRingInstance, ColorTrigonInstance, DrawCommand, Renderer},
+	input::{Button, InputMonitor, Key},
+	render::{DrawCommand, Renderer},
 	stroke::{Canvas, Stroke},
 	wintab::*,
 };
@@ -70,21 +70,25 @@ impl ModeStack {
 
 	pub fn temp_pan(&mut self, should_pan: bool) {
 		if should_pan {
-			if !matches!(self.transient_mode, Some(Mode::Panning { .. })) {
+			if !matches!(self.get(), &Mode::Panning { .. }) {
 				self.transient_mode = Some(Mode::Panning { origin: None });
 			}
 		} else {
-			self.transient_mode = None;
+			if matches!(self.get(), &Mode::Panning { .. }) {
+				self.transient_mode = None;
+			}
 		}
 	}
 
 	pub fn temp_choose(&mut self, cursor_origin: Option<Vec2<f32>>) {
 		if let Some(cursor_origin) = cursor_origin {
-			if !matches!(self.transient_mode, Some(Mode::ChoosingColor { .. })) {
+			if !matches!(self.get(), &Mode::ChoosingColor { .. }) {
 				self.transient_mode = Some(Mode::ChoosingColor { cursor_origin, part: None });
 			}
 		} else {
-			self.transient_mode = None;
+			if matches!(self.get(), &Mode::ChoosingColor { .. }) {
+				self.transient_mode = None;
+			}
 		}
 	}
 
@@ -402,8 +406,8 @@ impl App {
 	}
 
 	fn poll_tablet(&mut self) {
-		use Input::*;
-		if !self.input_monitor.inputs[LMouse].is_active {
+		use Button::*;
+		if !self.input_monitor.active_buttons.contains(Left) {
 			self.pressure = None;
 		}
 
@@ -415,64 +419,66 @@ impl App {
 	}
 
 	fn process_input(&mut self) {
-		use Input::*;
+		use Button::*;
+		use Key::*;
 
 		if self.input_monitor.is_fresh {
 			self.should_redraw = true;
 
-			use crate::input::Input::*;
-			if self.input_monitor.inputs[B].was_pressed() {
+			use crate::input::Key::*;
+			if self.input_monitor.should_trigger(EnumSet::EMPTY, B) {
 				self.mode_stack.switch_draw();
 			}
-			if self.input_monitor.inputs[Q].was_pressed() {
-				for stroke in self.canvas.strokes.iter_mut().filter(|x| x.is_selected) {
+			if self.input_monitor.should_trigger(LControl, A) {
+				for stroke in self.canvas.strokes.iter_mut() {
+					stroke.is_selected = true;
+				}
+			}
+			if self.input_monitor.should_trigger(LControl | LShift, A) {
+				for stroke in self.canvas.strokes.iter_mut() {
 					stroke.is_selected = false;
 				}
 			}
-			if self.input_monitor.inputs[S].was_pressed() {
+			if self.input_monitor.should_trigger(EnumSet::EMPTY, S) {
 				self.mode_stack.switch_select();
 			}
-			if self.input_monitor.inputs[T].was_pressed() {
+			if self.input_monitor.should_trigger(EnumSet::EMPTY, T) {
 				self.mode_stack.switch_move();
 			}
-			if self.input_monitor.inputs[X].was_pressed() {
+			if self.input_monitor.should_trigger(LControl, X) {
 				for _ in self.canvas.strokes.drain_filter(|x| x.is_selected) {}
 			}
-			if self.input_monitor.inputs[Z].was_emitted() {
+			if self.input_monitor.should_retrigger(EnumSet::EMPTY, Z) {
 				if self.mode_stack.is_drafting() {
 					self.mode_stack.discard_draft();
 				} else {
 					self.canvas.strokes.pop();
 				}
 			}
-			if self.input_monitor.inputs[Escape].was_pressed() {
+			if self.input_monitor.should_trigger(EnumSet::EMPTY, Escape) {
 				self.mode_stack.discard_draft();
 			}
-			if self.input_monitor.inputs[Space].is_different {
-				if self.input_monitor.inputs[Space].is_active {
-					self.mode_stack.temp_pan(true);
-				} else {
-					self.mode_stack.temp_pan(false);
-				}
+			if self.input_monitor.was_discovered(EnumSet::EMPTY, Space) {
+				self.mode_stack.temp_pan(true);
+			} else if self.input_monitor.was_undiscovered(EnumSet::EMPTY, Space) {
+				self.mode_stack.temp_pan(false);
 			}
-			if self.input_monitor.inputs[Tab].is_different {
-				if self.input_monitor.inputs[Tab].is_active {
-					self.mode_stack.temp_choose(Some(if self.is_cursor_relevant {
-						Vec2::new(self.cursor_x as f32, self.cursor_y as f32)
-					} else {
-						Vec2::new(self.renderer.width as f32 / 2., self.renderer.height as f32 / 2.)
-					}));
+			if self.input_monitor.was_discovered(EnumSet::EMPTY, Tab) {
+				self.mode_stack.temp_choose(Some(if self.is_cursor_relevant {
+					Vec2::new(self.cursor_x as f32, self.cursor_y as f32)
 				} else {
-					self.mode_stack.temp_choose(None);
-				}
+					Vec2::new(self.renderer.width as f32 / 2., self.renderer.height as f32 / 2.)
+				}));
+			} else if self.input_monitor.was_undiscovered(EnumSet::EMPTY, Tab) {
+				self.mode_stack.temp_choose(None);
 			}
 		}
 
 		match self.mode_stack.get_mut() {
 			Mode::Drawing { current_stroke } => {
 				self.window.set_cursor_icon(winit::window::CursorIcon::Arrow);
-				if self.input_monitor.inputs[LMouse].is_active {
-					if self.input_monitor.inputs[LMouse].is_different && current_stroke.is_none() {
+				if self.input_monitor.active_buttons.contains(Left) {
+					if self.input_monitor.different_buttons.contains(Left) && current_stroke.is_none() {
 						let srgb = hsv_to_srgb(self.current_color[0], self.current_color[1], self.current_color[2]).map(|n| if n >= 1.0 { 255 } else { (n * 256.) as u8 });
 						*current_stroke = Some(Stroke::new([srgb[0], srgb[1], srgb[2], 0xff]));
 					}
@@ -487,8 +493,8 @@ impl App {
 			Mode::Selecting { origin } => {
 				self.window.set_cursor_icon(winit::window::CursorIcon::Crosshair);
 
-				if self.input_monitor.inputs[LMouse].is_active {
-					if self.input_monitor.inputs[LMouse].is_different && origin.is_none() {
+				if self.input_monitor.active_buttons.contains(Left) {
+					if self.input_monitor.different_buttons.contains(Left) && origin.is_none() {
 						*origin = Some(Vec2::from(self.position) + Vec2::new(self.cursor_x, self.cursor_y).as_::<f32>());
 					}
 				} else {
@@ -496,12 +502,12 @@ impl App {
 						let current = Vec2::<f32>::from(self.position) + Vec2::new(self.cursor_x, self.cursor_y).as_::<f32>();
 						let min = Vec2::new(current.x.min(origin.x), current.y.min(origin.y));
 						let max = Vec2::new(current.x.max(origin.x), current.y.max(origin.y));
-						self.canvas.select(min, max, self.input_monitor.inputs[LShift].is_active);
+						self.canvas.select(min, max, self.input_monitor.active_keys.contains(LShift));
 					}
 				}
 			},
 			Mode::Panning { origin } => {
-				if self.input_monitor.inputs[LMouse].is_active {
+				if self.input_monitor.active_buttons.contains(Left) {
 					self.window.set_cursor_icon(winit::window::CursorIcon::Grabbing);
 					if origin.is_none() {
 						*origin = Some(PanOrigin {
@@ -524,8 +530,8 @@ impl App {
 			Mode::Moving { origin } => {
 				self.window.set_cursor_icon(winit::window::CursorIcon::Move);
 
-				if self.input_monitor.inputs[LMouse].is_active {
-					if self.input_monitor.inputs[LMouse].is_different && origin.is_none() {
+				if self.input_monitor.active_buttons.contains(Left) {
+					if self.input_monitor.different_buttons.contains(Left) && origin.is_none() {
 						*origin = Some(Vec2::from(self.position) + Vec2::new(self.cursor_x, self.cursor_y).as_::<f32>());
 					}
 				} else {
@@ -541,10 +547,10 @@ impl App {
 			Mode::ChoosingColor { cursor_origin, part } => {
 				self.window.set_cursor_icon(winit::window::CursorIcon::Crosshair);
 
-				if self.input_monitor.inputs[LMouse].is_active {
+				if self.input_monitor.active_buttons.contains(Left) {
 					let cursor = Vec2::new(self.cursor_x as f32, self.cursor_y as f32);
 					let vector = cursor - *cursor_origin;
-					if part.is_none() && self.input_monitor.inputs[LMouse].is_different {
+					if part.is_none() && self.input_monitor.different_buttons.contains(Left) {
 						let magnitude = vector.magnitude();
 						if magnitude >= HOLE_RADIUS && magnitude <= HOLE_RADIUS + RING_WIDTH {
 							*part = Some(ColorSelectionPart::Hue);
