@@ -28,23 +28,14 @@ pub struct Vertex {
 }
 
 impl Vertex {
-	// Returns the layout of buffers composed of instances of Vertex.
-	pub fn buffer_layout<'a>() -> VertexBufferLayout<'a> {
+	const ATTRIBUTES: [wgpu::VertexAttribute; 2] = wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x4];
+
+	// Returns the layout of buffers composed of instances of Self.
+	pub const fn buffer_layout<'a>() -> VertexBufferLayout<'a> {
 		wgpu::VertexBufferLayout {
 			array_stride: std::mem::size_of::<Self>() as wgpu::BufferAddress,
 			step_mode: wgpu::VertexStepMode::Vertex,
-			attributes: &[
-				wgpu::VertexAttribute {
-					offset: 0,
-					shader_location: 0,
-					format: wgpu::VertexFormat::Float32x3,
-				},
-				wgpu::VertexAttribute {
-					offset: std::mem::size_of::<[f32; 3]>() as wgpu::BufferAddress,
-					shader_location: 1,
-					format: wgpu::VertexFormat::Float32x4,
-				},
-			],
+			attributes: &Self::ATTRIBUTES,
 		}
 	}
 }
@@ -67,38 +58,14 @@ pub struct CardInstance {
 }
 
 impl CardInstance {
-	// Returns the layout of buffers composed of instances of Vertex.
-	pub fn buffer_layout<'a>() -> VertexBufferLayout<'a> {
+	const ATTRIBUTES: [wgpu::VertexAttribute; 5] = wgpu::vertex_attr_array![0 => Float32x2, 1 => Float32x2, 2 => Float32x4, 3 => Float32, 4 => Float32];
+
+	// Returns the layout of buffers composed of instances of Self.
+	pub const fn buffer_layout<'a>() -> VertexBufferLayout<'a> {
 		wgpu::VertexBufferLayout {
 			array_stride: std::mem::size_of::<Self>() as wgpu::BufferAddress,
 			step_mode: wgpu::VertexStepMode::Instance,
-			attributes: &[
-				wgpu::VertexAttribute {
-					offset: 0,
-					shader_location: 0,
-					format: wgpu::VertexFormat::Float32x2,
-				},
-				wgpu::VertexAttribute {
-					offset: std::mem::size_of::<[f32; 2]>() as wgpu::BufferAddress,
-					shader_location: 1,
-					format: wgpu::VertexFormat::Float32x2,
-				},
-				wgpu::VertexAttribute {
-					offset: std::mem::size_of::<[f32; 4]>() as wgpu::BufferAddress,
-					shader_location: 2,
-					format: wgpu::VertexFormat::Float32x4,
-				},
-				wgpu::VertexAttribute {
-					offset: std::mem::size_of::<[f32; 8]>() as wgpu::BufferAddress,
-					shader_location: 3,
-					format: wgpu::VertexFormat::Float32,
-				},
-				wgpu::VertexAttribute {
-					offset: std::mem::size_of::<[f32; 9]>() as wgpu::BufferAddress,
-					shader_location: 4,
-					format: wgpu::VertexFormat::Float32,
-				},
-			],
+			attributes: &Self::ATTRIBUTES,
 		}
 	}
 }
@@ -110,36 +77,40 @@ pub struct ColorWheelInstance {
 	pub radius_major: f32,
 	pub radius_minor: f32,
 	pub depth: f32,
+	pub saturation_value: [f32; 2],
 }
 
 impl ColorWheelInstance {
-	// Returns the layout of buffers composed of instances of Vertex.
-	pub fn buffer_layout<'a>() -> VertexBufferLayout<'a> {
+	const ATTRIBUTES: [wgpu::VertexAttribute; 5] = wgpu::vertex_attr_array![0 => Float32x2, 1 => Float32, 2 => Float32, 3 => Float32, 4 => Float32x2];
+
+	// Returns the layout of buffers composed of instances of Self.
+	pub const fn buffer_layout<'a>() -> VertexBufferLayout<'a> {
 		wgpu::VertexBufferLayout {
 			array_stride: std::mem::size_of::<Self>() as wgpu::BufferAddress,
 			step_mode: wgpu::VertexStepMode::Instance,
-			attributes: &[
-				wgpu::VertexAttribute {
-					offset: 0,
-					shader_location: 0,
-					format: wgpu::VertexFormat::Float32x2,
-				},
-				wgpu::VertexAttribute {
-					offset: std::mem::size_of::<[f32; 2]>() as wgpu::BufferAddress,
-					shader_location: 1,
-					format: wgpu::VertexFormat::Float32,
-				},
-				wgpu::VertexAttribute {
-					offset: std::mem::size_of::<[f32; 3]>() as wgpu::BufferAddress,
-					shader_location: 2,
-					format: wgpu::VertexFormat::Float32,
-				},
-				wgpu::VertexAttribute {
-					offset: std::mem::size_of::<[f32; 4]>() as wgpu::BufferAddress,
-					shader_location: 3,
-					format: wgpu::VertexFormat::Float32,
-				},
-			],
+			attributes: &Self::ATTRIBUTES,
+		}
+	}
+}
+
+#[repr(C)]
+#[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
+pub struct SaturationValuePlotInstance {
+	pub position: [f32; 2],
+	pub radius: f32,
+	pub hue: f32,
+	pub depth: f32,
+}
+
+impl SaturationValuePlotInstance {
+	const ATTRIBUTES: [wgpu::VertexAttribute; 4] = wgpu::vertex_attr_array![0 => Float32x2, 1 => Float32, 2 => Float32, 3 => Float32];
+
+	// Returns the layout of buffers composed of instances of Self.
+	pub const fn buffer_layout<'a>() -> VertexBufferLayout<'a> {
+		wgpu::VertexBufferLayout {
+			array_stride: std::mem::size_of::<Self>() as wgpu::BufferAddress,
+			step_mode: wgpu::VertexStepMode::Instance,
+			attributes: &Self::ATTRIBUTES,
 		}
 	}
 }
@@ -160,10 +131,12 @@ pub struct Renderer {
 	render_pipeline: wgpu::RenderPipeline,
 	rect_render_pipeline: wgpu::RenderPipeline,
 	colorwheel_render_pipeline: wgpu::RenderPipeline,
+	saturation_value_plot_render_pipeline: wgpu::RenderPipeline,
 	strokes_vertex_buffer: DynamicBuffer<Vertex>,
 	strokes_index_buffer: DynamicBuffer<u16>,
 	selections_vertex_buffer: DynamicBuffer<CardInstance>,
 	colorwheel_vertex_buffer: DynamicBuffer<ColorWheelInstance>,
+	saturation_value_plot_instance_buffer: DynamicBuffer<SaturationValuePlotInstance>,
 	rect_index_buffer: wgpu::Buffer,
 	rect_index_range: Range<u32>,
 }
@@ -384,6 +357,55 @@ impl Renderer {
 			})
 		};
 
+		let saturation_value_plot_render_pipeline = {
+			let saturation_value_plot_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+				label: Some("saturation_value_plot_shader"),
+				source: wgpu::ShaderSource::Wgsl(include_str!("saturation_value_plot.wgsl").into()),
+			});
+
+			let saturation_value_plot_render_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+				label: Some("saturation_value_plot_render_pipeline_layout"),
+				bind_group_layouts: &[&viewport_bind_group_layout],
+				push_constant_ranges: &[],
+			});
+
+			// We promise to supply a single vertex buffer in each render pass.
+			device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+				label: Some("saturation_value_plot_render_pipeline"),
+				layout: Some(&saturation_value_plot_render_pipeline_layout),
+				vertex: wgpu::VertexState {
+					module: &saturation_value_plot_shader,
+					entry_point: "vs_main",
+					buffers: &[SaturationValuePlotInstance::buffer_layout()],
+				},
+				fragment: Some(wgpu::FragmentState {
+					module: &saturation_value_plot_shader,
+					entry_point: "fs_main",
+					targets: &[Some(wgpu::ColorTargetState {
+						format: config.format,
+						blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+						write_mask: wgpu::ColorWrites::ALL,
+					})],
+				}),
+				primitive: wgpu::PrimitiveState {
+					topology: wgpu::PrimitiveTopology::TriangleList,
+					strip_index_format: None,
+					front_face: wgpu::FrontFace::Cw,
+					cull_mode: Some(wgpu::Face::Back),
+					polygon_mode: wgpu::PolygonMode::Fill,
+					unclipped_depth: false,
+					conservative: false,
+				},
+				depth_stencil: None,
+				multisample: wgpu::MultisampleState {
+					count: 1,
+					mask: !0,
+					alpha_to_coverage_enabled: false,
+				},
+				multiview: None,
+			})
+		};
+
 		let viewport_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
 			label: Some("viewport_buffer"),
 			contents: bytemuck::cast_slice(&[ViewportUniform {
@@ -406,6 +428,7 @@ impl Renderer {
 		let strokes_index_buffer = DynamicBuffer::<u16>::new(&device, wgpu::BufferUsages::INDEX, 1 << 16);
 		let selections_vertex_buffer = DynamicBuffer::<CardInstance>::new(&device, wgpu::BufferUsages::VERTEX, 1 << 0);
 		let colorwheel_vertex_buffer = DynamicBuffer::<ColorWheelInstance>::new(&device, wgpu::BufferUsages::VERTEX, 1 << 0);
+		let saturation_value_plot_instance_buffer = DynamicBuffer::<SaturationValuePlotInstance>::new(&device, wgpu::BufferUsages::VERTEX, 1 << 0);
 
 		// This index buffer will be used for any roundrect and colorwheel draw calls.
 		const RECT_INDICES: &[u16] = &[0, 1, 2, 0, 2, 3];
@@ -433,10 +456,12 @@ impl Renderer {
 			render_pipeline,
 			rect_render_pipeline,
 			colorwheel_render_pipeline,
+			saturation_value_plot_render_pipeline,
 			strokes_vertex_buffer,
 			strokes_index_buffer,
 			selections_vertex_buffer,
 			colorwheel_vertex_buffer,
+			saturation_value_plot_instance_buffer,
 			rect_index_buffer,
 			rect_index_range,
 		}
@@ -464,7 +489,14 @@ impl Renderer {
 
 	pub fn update(&mut self) {}
 
-	pub fn render(&mut self, selection_card_instances: &[CardInstance], mut strokes_vertices: Vec<Vertex>, mut strokes_indices: Vec<u16>, mut colorwheel_instances: Vec<ColorWheelInstance>) -> Result<(), wgpu::SurfaceError> {
+	pub fn render(
+		&mut self,
+		selection_card_instances: &[CardInstance],
+		strokes_vertices: Vec<Vertex>,
+		strokes_indices: Vec<u16>,
+		colorwheel_instances: Vec<ColorWheelInstance>,
+		saturation_value_plot_instances: Vec<SaturationValuePlotInstance>,
+	) -> Result<(), wgpu::SurfaceError> {
 		if self.is_pending_resize {
 			// We write the new size to the viewport buffer.
 			self.queue.write_buffer(
@@ -503,6 +535,20 @@ impl Renderer {
 				position: [0.; 2],
 				radius_major: 0.,
 				radius_minor: 0.,
+				depth: 0.,
+				saturation_value: [0.; 2],
+			},
+		);
+
+		let saturation_value_plot_instance_range = 0..saturation_value_plot_instances.len() as u32;
+		self.saturation_value_plot_instance_buffer.write(
+			&self.device,
+			&self.queue,
+			saturation_value_plot_instances,
+			SaturationValuePlotInstance {
+				position: [0.; 2],
+				radius: 0.,
+				hue: 0.,
 				depth: 0.,
 			},
 		);
@@ -546,6 +592,11 @@ impl Renderer {
 		render_pass.set_vertex_buffer(0, self.colorwheel_vertex_buffer.buffer.slice(..));
 		render_pass.set_index_buffer(self.rect_index_buffer.slice(..), wgpu::IndexFormat::Uint16);
 		render_pass.draw_indexed(self.rect_index_range.clone(), 0, colorwheel_instance_range);
+
+		render_pass.set_pipeline(&self.saturation_value_plot_render_pipeline);
+		render_pass.set_vertex_buffer(0, self.saturation_value_plot_instance_buffer.buffer.slice(..));
+		render_pass.set_index_buffer(self.rect_index_buffer.slice(..), wgpu::IndexFormat::Uint16);
+		render_pass.draw_indexed(self.rect_index_range.clone(), 0, saturation_value_plot_instance_range);
 
 		drop(render_pass);
 

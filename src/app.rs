@@ -1,5 +1,6 @@
 use std::time::{Duration, Instant};
 
+use env_logger::fmt::Color;
 use fast_srgb8::srgb8_to_f32;
 use vek::{Vec2, Vec3};
 use winit::dpi::{PhysicalPosition, PhysicalSize};
@@ -12,14 +13,26 @@ use winit::{
 
 use crate::{
 	input::{Input, InputMonitor},
-	render::{CardInstance, ColorWheelInstance, Renderer},
+	render::{CardInstance, ColorWheelInstance, Renderer, SaturationValuePlotInstance},
 	stroke::{Canvas, Stroke},
 	wintab::*,
 };
 
+fn hsv_to_srgb(h: f32, s: f32, v: f32) -> [f32; 3] {
+	fn hue(h: f32) -> [f32; 3] {
+		[(h * 6. - 3.).abs() - 1., 2. - (h * 6. - 2.).abs(), 2. - (h * 6. - 4.).abs()].map(|n| n.clamp(0., 1.))
+	}
+	hue(h).map(|n: f32| ((n - 1.) * s + 1.) * v)
+}
+
 struct PanOrigin {
 	cursor: Vec2<f64>,
 	position: Vec2<f32>,
+}
+
+enum ColorSelectionPart {
+	Hue,
+	SaturationValue,
 }
 
 enum Mode {
@@ -27,7 +40,7 @@ enum Mode {
 	Selecting { origin: Option<Vec2<f32>> },
 	Panning { origin: Option<PanOrigin> },
 	Moving { origin: Option<Vec2<f32>> },
-	ChoosingColor { cursor_origin: Vec2<f32>, is_selecting_hue: bool },
+	ChoosingColor { cursor_origin: Vec2<f32>, part: Option<ColorSelectionPart> },
 }
 
 struct ModeStack {
@@ -61,7 +74,7 @@ impl ModeStack {
 	pub fn temp_choose(&mut self, cursor_origin: Option<Vec2<f32>>) {
 		if let Some(cursor_origin) = cursor_origin {
 			if !matches!(self.transient_mode, Some(Mode::ChoosingColor { .. })) {
-				self.transient_mode = Some(Mode::ChoosingColor { cursor_origin, is_selecting_hue: false });
+				self.transient_mode = Some(Mode::ChoosingColor { cursor_origin, part: None });
 			}
 		} else {
 			self.transient_mode = None;
@@ -129,7 +142,7 @@ pub struct App {
 	mode_stack: ModeStack,
 	last_frame_instant: std::time::Instant,
 	input_monitor: InputMonitor,
-	current_color: [u8; 4],
+	current_color: [f32; 3],
 }
 
 impl App {
@@ -178,7 +191,7 @@ impl App {
 			mode_stack: ModeStack::new(Mode::Drawing { current_stroke: None }),
 			last_frame_instant: Instant::now() - Duration::new(1, 0),
 			input_monitor: InputMonitor::new(),
-			current_color: [0xfb, 0xfb, 0xff, 0xff],
+			current_color: [2. / 3., 0.016, 1.],
 		}
 	}
 
@@ -289,15 +302,24 @@ impl App {
 			vec![]
 		};
 
-		let colorwheel_instances = if let Mode::ChoosingColor { cursor_origin, .. } = self.mode_stack.get() {
-			vec![ColorWheelInstance {
-				position: (cursor_origin - 160.).into_array(),
-				radius_major: 160.,
-				radius_minor: 120.,
-				depth: 0.,
-			}]
+		let (colorwheel_instances, saturation_value_plot_instances) = if let Mode::ChoosingColor { cursor_origin, .. } = self.mode_stack.get() {
+			(
+				vec![ColorWheelInstance {
+					position: (cursor_origin - 160.).into_array(),
+					radius_major: 160.,
+					radius_minor: 120.,
+					depth: 0.,
+					saturation_value: [self.current_color[1], self.current_color[2]],
+				}],
+				vec![SaturationValuePlotInstance {
+					position: (cursor_origin - 119.).into_array(),
+					radius: 119.,
+					hue: self.current_color[0],
+					depth: 0.,
+				}],
+			)
 		} else {
-			vec![]
+			(vec![], vec![])
 		};
 
 		let selection_offset = if let Mode::Moving { origin: Some(origin) } = &self.mode_stack.base_mode {
@@ -308,7 +330,7 @@ impl App {
 
 		let (strokes_vertices, strokes_indices) = self.canvas.bake(self.mode_stack.current_stroke(), selection_offset);
 
-		self.renderer.render(&card_instances, strokes_vertices, strokes_indices, colorwheel_instances)
+		self.renderer.render(&card_instances, strokes_vertices, strokes_indices, colorwheel_instances, saturation_value_plot_instances)
 	}
 
 	fn poll_tablet(&mut self) {
@@ -367,7 +389,11 @@ impl App {
 			}
 			if self.input_monitor.inputs[Tab].is_different {
 				if self.input_monitor.inputs[Tab].is_active {
-					self.mode_stack.temp_choose(Some(Vec2::new(self.cursor_x as f32, self.cursor_y as f32)));
+					self.mode_stack.temp_choose(Some(if self.is_cursor_relevant {
+						Vec2::new(self.cursor_x as f32, self.cursor_y as f32)
+					} else {
+						Vec2::new(self.renderer.width as f32 / 2., self.renderer.height as f32 / 2.)
+					}));
 				} else {
 					self.mode_stack.temp_choose(None);
 				}
@@ -379,7 +405,8 @@ impl App {
 				self.window.set_cursor_icon(winit::window::CursorIcon::Arrow);
 				if self.input_monitor.inputs[LMouse].is_active {
 					if self.input_monitor.inputs[LMouse].is_different && current_stroke.is_none() {
-						*current_stroke = Some(Stroke::new(self.current_color));
+						let srgb = hsv_to_srgb(self.current_color[0], self.current_color[1], self.current_color[2]).map(|n| if n >= 1.0 { 255 } else { (n * 256.) as u8 });
+						*current_stroke = Some(Stroke::new([srgb[0], srgb[1], srgb[2], 0xff]));
 					}
 
 					if let Some(current_stroke) = current_stroke {
@@ -408,7 +435,6 @@ impl App {
 			Mode::Panning { origin } => {
 				if self.input_monitor.inputs[LMouse].is_active {
 					self.window.set_cursor_icon(winit::window::CursorIcon::Grabbing);
-					// TODO: We ignore was_cursor_changed_this_frame; figure out a consistent, intuitive standard across modes.
 					if origin.is_none() {
 						*origin = Some(PanOrigin {
 							cursor: Vec2::new(self.cursor_x, self.cursor_y),
@@ -444,35 +470,38 @@ impl App {
 					}
 				}
 			},
-			Mode::ChoosingColor { cursor_origin, is_selecting_hue } => {
+			Mode::ChoosingColor { cursor_origin, part } => {
 				self.window.set_cursor_icon(winit::window::CursorIcon::Crosshair);
 
-				if self.input_monitor.inputs[LMouse].is_active && (self.input_monitor.inputs[LMouse].is_different || *is_selecting_hue) {
+				if self.input_monitor.inputs[LMouse].is_active {
 					let cursor = Vec2::new(self.cursor_x as f32, self.cursor_y as f32);
-					let center = *cursor_origin;
-					let vector = cursor - center;
-					let magnitude = vector.magnitude();
-					if magnitude >= 120. && magnitude <= 160. {
-						*is_selecting_hue = true;
-						let normalized_angle = vector.y.atan2(vector.x) / (2.0 * std::f32::consts::PI) + 0.5;
-
-						fn hsv_to_srgb(h: f32, s: f32, v: f32) -> [f32; 3] {
-							fn hue(h: f32) -> [f32; 3] {
-								[(h * 6. - 3.).abs() - 1., 2. - (h * 6. - 2.).abs(), 2. - (h * 6. - 4.).abs()].map(|n| n.clamp(0., 1.))
-							}
-							hue(h).map(|n: f32| ((n - 1.) * s + 1.) * v)
+					let vector = cursor - *cursor_origin;
+					let triangle_radius = 119.;
+					if part.is_none() && self.input_monitor.inputs[LMouse].is_different {
+						let magnitude = vector.magnitude();
+						if magnitude >= 120. && magnitude <= 160. {
+							*part = Some(ColorSelectionPart::Hue);
+						} else if 2. * vector.y < triangle_radius && -(3.0f32.sqrt()) * vector.x - vector.y < triangle_radius && (3.0f32.sqrt()) * vector.x - vector.y < triangle_radius {
+							*part = Some(ColorSelectionPart::SaturationValue);
 						}
-
-						let srgb = hsv_to_srgb(normalized_angle, 1., 1.).map(|n| if n >= 1.0 { 255 } else { (n * 256.) as u8 });
-
-						self.current_color = [srgb[0], srgb[1], srgb[2], 0xff];
 					}
+
+					match part {
+						Some(ColorSelectionPart::Hue) => {
+							self.current_color[0] = vector.y.atan2(vector.x) / (2.0 * std::f32::consts::PI) + 0.5;
+						},
+						Some(ColorSelectionPart::SaturationValue) => {
+							let scaled_vector = vector / triangle_radius;
+							self.current_color[1] = (1. - 2. * scaled_vector.y).clamp(0., 3.) / (2. + 3.0f32.sqrt() * scaled_vector.x - scaled_vector.y).clamp(0., 3.);
+							self.current_color[2] = ((2. + 3.0f32.sqrt() * scaled_vector.x - scaled_vector.y) / 3.).clamp(0., 1.);
+						},
+						None => {},
+					}
+				} else {
+					*part = None;
 				}
 			},
 		}
-
-		// FIXME: This is a little wasteful. Is it feasible to only update if something actually does change on-screen?
-		self.should_redraw = true;
 
 		// Reset inputs.
 		self.input_monitor.defresh();

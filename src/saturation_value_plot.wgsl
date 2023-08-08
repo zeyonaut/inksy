@@ -7,18 +7,16 @@ struct ViewportUniform {
 
 struct VertexInput {
 	@location(0) position: vec2<f32>,
-	@location(1) radius_major: f32,
-	@location(2) radius_minor: f32,
+	@location(1) radius: f32,
+	@location(2) hue: f32,
 	@location(3) depth: f32,
-	@location(4) saturation_value: vec2<f32>,
 }
 
 struct VertexOutput {
 	@builtin(position) position: vec4<f32>,
-	@location(0) center: vec2<f32>,
-	@location(1) radius_major: f32,
-	@location(2) radius_minor: f32,
-	@location(3) saturation_value: vec2<f32>,
+	@location(0) origin: vec2<f32>,
+	@location(1) radius: f32,
+	@location(2) hue: f32,
 }
 
 var<private> vertices: array<vec2<f32>, 4> = array<vec2<f32>, 4>(
@@ -32,11 +30,10 @@ var<private> vertices: array<vec2<f32>, 4> = array<vec2<f32>, 4>(
 fn vs_main(shape: VertexInput, @builtin(vertex_index) index: u32) -> VertexOutput {
 	var out: VertexOutput;
 	let position = shape.position;
-	out.position = vec4((vertices[index] * shape.radius_major + position) / viewport.size * vec2(2., -2.) + vec2(-1., 1.), shape.depth, 1.);
-	out.center = position + shape.radius_major;
-	out.radius_major = shape.radius_major;
-	out.radius_minor = shape.radius_minor;
-	out.saturation_value = shape.saturation_value;
+	out.position = vec4((vertices[index] * shape.radius + position) / viewport.size * vec2(2.0, -2.0) + vec2(-1.0, 1.0), shape.depth, 1.0);
+	out.origin = position + shape.radius;
+	out.radius = shape.radius;
+	out.hue = shape.hue;
 	return out;
 }
 
@@ -57,9 +54,11 @@ const PI: f32 = 3.141592653589793238462643383279;
 
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
-	let vector = in.position.xy - in.center;
-	let distance_from_center = length(vector);
-	let color_hsv = vec3(atan2(vector.y, vector.x) / (2. * PI) + 0.5, in.saturation_value);
+	let vector = in.position.xy - in.origin;
+	let scaled_vector = vector / in.radius;
+	let s = (1. - 2. * scaled_vector.y) / (2. + sqrt(3.) * scaled_vector.x - scaled_vector.y);
+	let v = (2. + sqrt(3.) * scaled_vector.x - scaled_vector.y) / 3.;
+	let color_hsv = vec3(in.hue, s, v);
 	let color = srgb_to_linear(hsv_to_srgb(color_hsv));
-	return vec4(color, smoothstep(in.radius_minor - 1./sqrt(2.), in.radius_minor, distance_from_center) * (1. - smoothstep(in.radius_major, in.radius_major + 1./sqrt(2.), distance_from_center))) ;
+	return vec4(color, (1. - smoothstep(in.radius, in.radius + sqrt(2.), vector.y * 2.)) * (1. - smoothstep(in.radius, in.radius + sqrt(2.), -sqrt(3.) * vector.x - vector.y)) * (1. - smoothstep(in.radius, in.radius + sqrt(2.), sqrt(3.) * vector.x - vector.y)));
 }
