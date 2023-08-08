@@ -216,11 +216,11 @@ impl Renderer {
 			label: Some("viewport_bind_group_layout"),
 		});
 
-		// We create a render pipeline from the vertex and fragment shaders in src/shader.wgsl.
+		// We create a render pipeline from the vertex and fragment shaders.
 		let render_pipeline = {
 			let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
 				label: Some("shader"),
-				source: wgpu::ShaderSource::Wgsl(include_str!("shader.wgsl").into()),
+				source: wgpu::ShaderSource::Wgsl(include_str!("shaders/shader.wgsl").into()),
 			});
 
 			let render_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
@@ -269,7 +269,7 @@ impl Renderer {
 		let rect_render_pipeline = {
 			let rect_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
 				label: Some("rect_shader"),
-				source: wgpu::ShaderSource::Wgsl(include_str!("roundrect.wgsl").into()),
+				source: wgpu::ShaderSource::Wgsl(include_str!("shaders/roundrect.wgsl").into()),
 			});
 
 			let rect_render_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
@@ -318,7 +318,7 @@ impl Renderer {
 		let colorwheel_render_pipeline = {
 			let colorwheel_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
 				label: Some("colorwheel_shader"),
-				source: wgpu::ShaderSource::Wgsl(include_str!("colorwheel.wgsl").into()),
+				source: wgpu::ShaderSource::Wgsl(include_str!("shaders/colorwheel.wgsl").into()),
 			});
 
 			let colorwheel_render_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
@@ -367,7 +367,7 @@ impl Renderer {
 		let saturation_value_plot_render_pipeline = {
 			let saturation_value_plot_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
 				label: Some("saturation_value_plot_shader"),
-				source: wgpu::ShaderSource::Wgsl(include_str!("saturation_value_plot.wgsl").into()),
+				source: wgpu::ShaderSource::Wgsl(include_str!("shaders/saturation_value_plot.wgsl").into()),
 			});
 
 			let saturation_value_plot_render_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {

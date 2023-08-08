@@ -504,7 +504,7 @@ impl App {
 							let scaled_vector = scaled_vector + ((dot - dot.min(0.5)) * -other);
 							let scaled_vector = Vec2::new(scaled_vector.x.max(-3.0f32.sqrt() / 2.), scaled_vector.y.min(0.5));
 							self.current_color[1] = (1. - 2. * scaled_vector.y) / (2. + 3.0f32.sqrt() * scaled_vector.x - scaled_vector.y);
-							self.current_color[2] = ((2. + 3.0f32.sqrt() * scaled_vector.x  - scaled_vector.y) / 3.).clamp(0., 1.);
+							self.current_color[2] = ((2. + 3.0f32.sqrt() * scaled_vector.x - scaled_vector.y) / 3.).clamp(0., 1.);
 						},
 						None => {},
 					}
