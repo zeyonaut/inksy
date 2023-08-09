@@ -6,11 +6,13 @@
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
 #![feature(array_windows)]
-#![feature(drain_filter)]
+#![feature(extract_if)]
+#![windows_subsystem = "windows"]
 
 mod app;
 mod buffer;
 mod input;
+mod linux;
 mod render;
 mod stroke;
 mod wintab;

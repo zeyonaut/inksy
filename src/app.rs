@@ -10,19 +10,21 @@ use std::time::{Duration, Instant};
 use enumset::EnumSet;
 use fast_srgb8::srgb8_to_f32;
 use vek::Vec2;
-use winit::dpi::{PhysicalPosition, PhysicalSize};
-#[cfg(target_os = "windows")]
 use winit::{
+	dpi::{PhysicalPosition, PhysicalSize},
 	event::*,
 	event_loop::{ControlFlow, EventLoop},
 	window::WindowBuilder,
 };
 
+#[cfg(target_os = "linux")]
+use crate::linux::*;
+#[cfg(target_os = "windows")]
+use crate::wintab::*;
 use crate::{
 	input::{Button, InputMonitor, Key},
 	render::{DrawCommand, Renderer},
 	stroke::{Canvas, Stroke},
-	wintab::*,
 };
 
 fn hsv_to_srgb(h: f32, s: f32, v: f32) -> [f32; 3] {
@@ -442,7 +444,7 @@ impl App {
 				self.mode_stack.switch_draw();
 			}
 			if self.input_monitor.should_trigger(EnumSet::EMPTY, Backspace) {
-				for _ in self.canvas.strokes.drain_filter(|x| x.is_selected) {}
+				for _ in self.canvas.strokes.extract_if(|x| x.is_selected) {}
 			}
 			if self.input_monitor.should_trigger(LControl | LShift, F) {
 				if self.is_fullscreen {
@@ -454,15 +456,20 @@ impl App {
 			}
 			if self.input_monitor.should_trigger(LControl, X) {
 				let offset = Vec2::new(self.cursor_x as f32, self.cursor_y as f32) + Vec2::from(self.position);
-				self.clipboard_contents = Some(ClipboardContents::Subcanvas(self.canvas.strokes.drain_filter(|x| {
-					if x.is_selected {
-						x.origin = x.origin - offset;
-						x.is_selected = false;
-						true
-					} else {
-						false
-					}
-				}).collect()));
+				self.clipboard_contents = Some(ClipboardContents::Subcanvas(
+					self.canvas
+						.strokes
+						.extract_if(|x| {
+							if x.is_selected {
+								x.origin = x.origin - offset;
+								x.is_selected = false;
+								true
+							} else {
+								false
+							}
+						})
+						.collect(),
+				));
 			}
 			if self.input_monitor.should_trigger(LControl, C) {
 				let offset = Vec2::new(self.cursor_x as f32, self.cursor_y as f32) + Vec2::from(self.position);

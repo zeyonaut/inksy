@@ -38,7 +38,10 @@ impl Stroke {
 
 	pub fn add_point(&mut self, x: f32, y: f32, pressure: f32) {
 		if self.points.last().map_or(true, |point| (Vec2::new(x, y) - (self.origin + point.position)).magnitude() > 2.) {
-			self.points.push(Point { position: Vec2::new(x - self.origin.x, y - self.origin.y), pressure });
+			self.points.push(Point {
+				position: Vec2::new(x - self.origin.x, y - self.origin.y),
+				pressure,
+			});
 		}
 	}
 }
@@ -93,8 +96,8 @@ impl Canvas {
 
 			if stroke.is_selected {
 				let stroke_index = u16::try_from(vertices.len()).unwrap();
-	
-				const BORDER_RADIUS: f32= 6.;
+
+				const BORDER_RADIUS: f32 = 6.;
 				let mut positions = vec![];
 				let border_perpendiculars = stroke
 					.points
@@ -104,18 +107,17 @@ impl Canvas {
 						Vec2::new(forward.y, -forward.x).normalized() * BORDER_RADIUS
 					})
 					.collect::<Vec<_>>();
-	
 
 				for ([a, b], (p, o)) in stroke.points.array_windows::<2>().zip(perpendiculars.iter().zip(border_perpendiculars)) {
 					let current_index = stroke_index + u16::try_from(positions.len()).unwrap();
 					positions.extend([a.position + p * a.pressure + o, a.position - p * a.pressure - o, b.position + p * b.pressure + o, b.position - p * b.pressure - o].map(|x| x + stroke.origin + stroke_offset));
 					indices.extend([0, 2, 3, 0, 3, 1].map(|n| current_index + n));
 				}
-	
+
 				for (i, [p, q]) in perpendiculars.array_windows::<2>().enumerate() {
 					let i = u16::try_from(i).unwrap();
 					let cross_product = p.x * q.y - p.y * q.x;
-	
+
 					if cross_product > 0. {
 						/* Clockwise */
 						indices.extend([2, 4 + 0, 4 + 1].map(|n| stroke_index + n + i * 4));
@@ -124,7 +126,7 @@ impl Canvas {
 						indices.extend([3, 4 + 1, 4 + 0].map(|n| stroke_index + n + i * 4));
 					}
 				}
-	
+
 				vertices.extend(positions.into_iter().map(|position| Vertex {
 					position: [position.x, position.y, 0.],
 					color: [0x28, 0xc2, 0xff, 0xff].map(srgb8_to_f32),

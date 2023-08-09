@@ -7,8 +7,6 @@ version = "0.1.0"
 edition = "2021"
 license = "MPL-2.0"
 
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
-
 [dependencies]
 winit = "0.28.6"
 env_logger = "0.10"
@@ -27,11 +25,11 @@ enumset = "1.1.2"
 windows-sys = "0.48"
 libloading = "0.8.0"
 
+[target.'cfg(linux)'.dependencies]
+x11-dl = "2.21.0"
 
-# Enable a small amount of optimization in debug mode
 [profile.dev]
 opt-level = 1
 
-# Enable high optimizations for dependencies (incl. Bevy), but not for our code:
 [profile.dev.package."*"]
 opt-level = 3
