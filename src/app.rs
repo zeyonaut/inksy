@@ -32,6 +32,12 @@ fn hsv_to_srgb(h: f32, s: f32, v: f32) -> [f32; 3] {
 	hue(h).map(|n: f32| ((n - 1.) * s + 1.) * v)
 }
 
+fn hsv_to_srgba8(hsv: [f32; 3]) -> [u8; 4] {
+	let [h, s, v] = hsv;
+	let [r, g, b] = hsv_to_srgb(h, s, v).map(|n| if n >= 1.0 { 255 } else { (n * 256.) as u8 });
+	[r, g, b, 0xff]
+}
+
 struct PanOrigin {
 	cursor: Vec2<f64>,
 	position: Vec2<f32>,
@@ -143,6 +149,10 @@ const TRIGON_RADIUS: f32 = 102.;
 const HOLE_RADIUS: f32 = 120.;
 const RING_WIDTH: f32 = 42.;
 
+pub enum ClipboardContents {
+	Subcanvas(Vec<Stroke>),
+}
+
 // Current state of our app.
 pub struct App {
 	window: winit::window::Window,
@@ -160,6 +170,8 @@ pub struct App {
 	last_frame_instant: std::time::Instant,
 	input_monitor: InputMonitor,
 	current_color: [f32; 3],
+	clipboard_contents: Option<ClipboardContents>,
+	is_fullscreen: bool,
 }
 
 impl App {
@@ -209,6 +221,8 @@ impl App {
 			last_frame_instant: Instant::now() - Duration::new(1, 0),
 			input_monitor: InputMonitor::new(),
 			current_color: [2. / 3., 0.016, 1.],
+			clipboard_contents: None,
+			is_fullscreen: false,
 		}
 	}
 
@@ -320,8 +334,7 @@ impl App {
 		});
 
 		// Draw selection rectangles.
-		// FIXME: Check if selecting in transient mode first.
-		if let Mode::Selecting { origin: Some(origin) } = &self.mode_stack.base_mode {
+		if let Mode::Selecting { origin: Some(origin) } = &self.mode_stack.get() {
 			let current = Vec2::<f32>::from(self.position) + Vec2::new(self.cursor_x, self.cursor_y).as_::<f32>();
 			draw_commands.push(DrawCommand::Card {
 				position: [current.x.min(origin.x), current.y.min(origin.y)],
@@ -341,8 +354,7 @@ impl App {
 				ring_width: RING_WIDTH,
 			});
 
-			let srgb = hsv_to_srgb(self.current_color[0], self.current_color[1], self.current_color[2]).map(|n| if n >= 1.0 { 255 } else { (n * 256.) as u8 });
-			let srgba = [srgb[0], srgb[1], srgb[2], 0xff];
+			let srgba8 = hsv_to_srgba8(self.current_color);
 
 			let ring_position = cursor_origin
 				+ Vec2::new(
@@ -368,7 +380,7 @@ impl App {
 			draw_commands.push(DrawCommand::Card {
 				position: (ring_position - hue_window_width / 2. + self.position).into_array(),
 				dimensions: [hue_window_width; 2],
-				color: srgba,
+				color: srgba8,
 				radius: hue_window_width / 2.,
 			});
 
@@ -397,7 +409,7 @@ impl App {
 			draw_commands.push(DrawCommand::Card {
 				position: (trigon_position - sv_window_width / 2. + self.position).into_array(),
 				dimensions: [sv_window_width; 2],
-				color: srgba,
+				color: srgba8,
 				radius: sv_window_width / 2.,
 			});
 		}
@@ -429,14 +441,72 @@ impl App {
 			if self.input_monitor.should_trigger(EnumSet::EMPTY, B) {
 				self.mode_stack.switch_draw();
 			}
+			if self.input_monitor.should_trigger(EnumSet::EMPTY, Backspace) {
+				for _ in self.canvas.strokes.drain_filter(|x| x.is_selected) {}
+			}
+			if self.input_monitor.should_trigger(LControl | LShift, F) {
+				if self.is_fullscreen {
+					self.window.set_fullscreen(None);
+				} else {
+					self.window.set_fullscreen(Some(winit::window::Fullscreen::Borderless(self.window.current_monitor())));
+				}
+				self.is_fullscreen = !self.is_fullscreen;
+			}
+			if self.input_monitor.should_trigger(LControl, X) {
+				let offset = Vec2::new(self.cursor_x as f32, self.cursor_y as f32) + Vec2::from(self.position);
+				self.clipboard_contents = Some(ClipboardContents::Subcanvas(self.canvas.strokes.drain_filter(|x| {
+					if x.is_selected {
+						x.origin = x.origin - offset;
+						x.is_selected = false;
+						true
+					} else {
+						false
+					}
+				}).collect()));
+			}
+			if self.input_monitor.should_trigger(LControl, C) {
+				let offset = Vec2::new(self.cursor_x as f32, self.cursor_y as f32) + Vec2::from(self.position);
+				self.clipboard_contents = Some(ClipboardContents::Subcanvas(
+					self.canvas
+						.strokes
+						.iter()
+						.filter(|x| x.is_selected)
+						.map(|stroke| Stroke {
+							origin: stroke.origin - offset,
+							color: stroke.color,
+							points: stroke.points.clone(),
+							is_selected: false,
+						})
+						.collect::<Vec<_>>(),
+				))
+			}
+			if self.input_monitor.should_trigger(LControl, V) {
+				if let Some(ClipboardContents::Subcanvas(strokes)) = self.clipboard_contents.as_ref() {
+					for stroke in self.canvas.strokes.iter_mut() {
+						stroke.is_selected = false;
+					}
+					let offset = Vec2::new(self.cursor_x as f32, self.cursor_y as f32) + Vec2::from(self.position);
+					self.canvas.strokes.extend(strokes.iter().map(|stroke| Stroke {
+						origin: stroke.origin + offset,
+						color: stroke.color,
+						points: stroke.points.clone(),
+						is_selected: true,
+					}));
+				}
+			}
 			if self.input_monitor.should_trigger(LControl, A) {
 				for stroke in self.canvas.strokes.iter_mut() {
 					stroke.is_selected = true;
 				}
 			}
-			if self.input_monitor.should_trigger(LControl | LShift, A) {
+			if self.input_monitor.should_trigger(LShift, A) {
 				for stroke in self.canvas.strokes.iter_mut() {
 					stroke.is_selected = false;
+				}
+			}
+			if self.input_monitor.should_trigger(Tab, R) {
+				for stroke in self.canvas.strokes.iter_mut().filter(|stroke| stroke.is_selected) {
+					stroke.color = hsv_to_srgba8(self.current_color);
 				}
 			}
 			if self.input_monitor.should_trigger(EnumSet::EMPTY, S) {
@@ -444,9 +514,6 @@ impl App {
 			}
 			if self.input_monitor.should_trigger(EnumSet::EMPTY, T) {
 				self.mode_stack.switch_move();
-			}
-			if self.input_monitor.should_trigger(LControl, X) {
-				for _ in self.canvas.strokes.drain_filter(|x| x.is_selected) {}
 			}
 			if self.input_monitor.should_retrigger(EnumSet::EMPTY, Z) {
 				if self.mode_stack.is_drafting() {
@@ -479,8 +546,8 @@ impl App {
 				self.window.set_cursor_icon(winit::window::CursorIcon::Arrow);
 				if self.input_monitor.active_buttons.contains(Left) {
 					if self.input_monitor.different_buttons.contains(Left) && current_stroke.is_none() {
-						let srgb = hsv_to_srgb(self.current_color[0], self.current_color[1], self.current_color[2]).map(|n| if n >= 1.0 { 255 } else { (n * 256.) as u8 });
-						*current_stroke = Some(Stroke::new([srgb[0], srgb[1], srgb[2], 0xff]));
+						let srgba8 = hsv_to_srgba8(self.current_color);
+						*current_stroke = Some(Stroke::new(self.position, srgba8));
 					}
 
 					if let Some(current_stroke) = current_stroke {

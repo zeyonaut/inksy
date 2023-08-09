@@ -10,7 +10,7 @@ license = "MPL-2.0"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-winit = {git = "https://github.com/rust-windowing/winit.git", version = "0.27"}
+winit = "0.28.6"
 env_logger = "0.10"
 log = "0.4"
 wgpu = {version = "0.16", features = ["vulkan-portability"]}
