@@ -17,6 +17,8 @@ use crate::{
 	pixel::{Lx, Px, Vex},
 };
 
+const SHOULD_MULTISAMPLE: bool = false;
+
 pub enum DrawCommand {
 	Trimesh { vertices: Vec<Vertex>, indices: Vec<u16> },
 	Card { position: Vex<2, Px>, dimensions: Vex<2, Px>, color: [u8; 4], radius: Px },
@@ -153,6 +155,8 @@ pub struct Renderer {
 	color_trigon_instance_buffer: DynamicBuffer<ColorTrigonInstance>,
 	rect_index_buffer: wgpu::Buffer,
 	rect_index_range: Range<u32>,
+	multisample_texture: Option<wgpu::Texture>,
+	texture_format: wgpu::TextureFormat,
 }
 
 impl Renderer {
@@ -198,7 +202,7 @@ impl Renderer {
 		let texture_format = surface_capabilities.formats.iter().find(|f| f.is_srgb()).copied().unwrap_or(*surface_capabilities.formats.first().unwrap());
 
 		let config = wgpu::SurfaceConfiguration {
-			usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+			usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_DST,
 			format: texture_format,
 			width,
 			height,
@@ -207,6 +211,21 @@ impl Renderer {
 			view_formats: vec![],
 		};
 		surface.configure(&device, &config);
+
+		let multisample_texture = if adapter.get_texture_format_features(texture_format).flags.sample_count_supported(4) && SHOULD_MULTISAMPLE {
+			Some(device.create_texture(&wgpu::TextureDescriptor {
+				label: None,
+				size: wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
+				mip_level_count: 1,
+				sample_count: 4,
+				dimension: wgpu::TextureDimension::D2,
+				format: texture_format,
+				usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+				view_formats: vec![].as_slice(),
+			}))
+		} else {
+			None
+		};
 
 		// Create a viewport uniform buffer and bind group layout.
 		let viewport_bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
@@ -265,7 +284,7 @@ impl Renderer {
 				},
 				depth_stencil: None,
 				multisample: wgpu::MultisampleState {
-					count: 1,
+					count: multisample_texture.as_ref().map_or_else(|| 1, |_| 4),
 					mask: !0,
 					alpha_to_coverage_enabled: false,
 				},
@@ -314,7 +333,7 @@ impl Renderer {
 				},
 				depth_stencil: None,
 				multisample: wgpu::MultisampleState {
-					count: 1,
+					count: multisample_texture.as_ref().map_or_else(|| 1, |_| 4),
 					mask: !0,
 					alpha_to_coverage_enabled: false,
 				},
@@ -363,7 +382,7 @@ impl Renderer {
 				},
 				depth_stencil: None,
 				multisample: wgpu::MultisampleState {
-					count: 1,
+					count: multisample_texture.as_ref().map_or_else(|| 1, |_| 4),
 					mask: !0,
 					alpha_to_coverage_enabled: false,
 				},
@@ -412,7 +431,7 @@ impl Renderer {
 				},
 				depth_stencil: None,
 				multisample: wgpu::MultisampleState {
-					count: 1,
+					count: multisample_texture.as_ref().map_or_else(|| 1, |_| 4),
 					mask: !0,
 					alpha_to_coverage_enabled: false,
 				},
@@ -481,6 +500,8 @@ impl Renderer {
 			color_trigon_instance_buffer,
 			rect_index_buffer,
 			rect_index_range,
+			multisample_texture,
+			texture_format,
 		}
 	}
 
@@ -495,6 +516,18 @@ impl Renderer {
 			self.scale_factor = scale_factor;
 			self.surface.configure(&self.device, &self.config);
 			self.is_pending_resize = true;
+			if let Some(multisample_texture) = self.multisample_texture.as_mut() {
+				*multisample_texture = self.device.create_texture(&wgpu::TextureDescriptor {
+					label: None,
+					size: wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
+					mip_level_count: 1,
+					sample_count: 4,
+					dimension: wgpu::TextureDimension::D2,
+					format: self.texture_format,
+					usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+					view_formats: vec![].as_slice(),
+				})
+			}
 		}
 	}
 
@@ -623,7 +656,9 @@ impl Renderer {
 
 		// Set up the surface texture we will later render to.
 		let output = self.surface.get_current_texture()?;
-		let view = output.texture.create_view(&wgpu::TextureViewDescriptor::default());
+
+		let output_view = output.texture.create_view(&wgpu::TextureViewDescriptor::default());
+		let multisample_view = self.multisample_texture.as_ref().map(|x| x.create_view(&wgpu::TextureViewDescriptor::default()));
 
 		// Set up the command buffer we will later send to the GPU.
 		let mut encoder = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("Render Encoder") });
@@ -633,8 +668,8 @@ impl Renderer {
 		let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
 			label: Some("render_pass"),
 			color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-				view: &view,
-				resolve_target: None,
+				view: multisample_view.as_ref().unwrap_or(&output_view),
+				resolve_target: multisample_view.as_ref().map(|_| &output_view),
 				ops: wgpu::Operations {
 					load: wgpu::LoadOp::Clear(self.clear_color),
 					store: true,
