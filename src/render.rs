@@ -11,19 +11,16 @@ use fast_srgb8::srgb8_to_f32;
 use pollster::FutureExt;
 use raw_window_handle::{HasRawDisplayHandle, HasRawWindowHandle};
 use wgpu::{util::DeviceExt, SurfaceTexture, VertexBufferLayout};
-use wgpu_glyph::{ab_glyph, GlyphBrushBuilder, Section, Text};
 
 use crate::{
 	buffer::DynamicBuffer,
-	stroke::{Canvas, Stroke},
+	pixel::{Lx, Px, Vex},
 };
-
-const MAX_FRAME_RATE: u16 = 60;
 
 pub enum DrawCommand {
 	Trimesh { vertices: Vec<Vertex>, indices: Vec<u16> },
-	Card { position: [f32; 2], dimensions: [f32; 2], color: [u8; 4], radius: f32 },
-	ColorSelector { position: [f32; 2], hsv: [f32; 3], trigon_radius: f32, hole_radius: f32, ring_width: f32 },
+	Card { position: Vex<2, Px>, dimensions: Vex<2, Px>, color: [u8; 4], radius: Px },
+	ColorSelector { position: Vex<2, Px>, hsv: [f32; 3], trigon_radius: Px, hole_radius: Px, ring_width: Px },
 }
 
 pub enum RenderCommand {
@@ -37,7 +34,7 @@ pub enum RenderCommand {
 #[repr(C)]
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct Vertex {
-	pub position: [f32; 3],
+	pub position: [Lx; 3],
 	pub color: [f32; 4],
 }
 
@@ -59,6 +56,8 @@ impl Vertex {
 struct ViewportUniform {
 	pub position: [f32; 2],
 	pub size: [f32; 2],
+	pub scale: f32,
+	pub _padding: [f32; 1],
 }
 
 #[repr(C)]
@@ -137,7 +136,8 @@ pub struct Renderer {
 	config: wgpu::SurfaceConfiguration,
 	pub width: u32,
 	pub height: u32,
-	pub position: [f32; 2],
+	pub position: Vex<2, Lx>,
+	pub scale_factor: f32,
 	pub is_pending_resize: bool,
 	pub clear_color: wgpu::Color,
 	viewport_buffer: wgpu::Buffer,
@@ -157,7 +157,7 @@ pub struct Renderer {
 
 impl Renderer {
 	// Create an instance of the renderer.
-	pub fn new<W>(window: &W, position: [f32; 2], width: u32, height: u32) -> Self
+	pub fn new<W>(window: &W, position: Vex<2, Lx>, width: u32, height: u32, scale_factor: f32) -> Self
 	where
 		W: HasRawWindowHandle + HasRawDisplayHandle,
 	{
@@ -425,6 +425,8 @@ impl Renderer {
 			contents: bytemuck::cast_slice(&[ViewportUniform {
 				position: [0., 0.],
 				size: [width as f32, height as f32],
+				scale: scale_factor,
+				_padding: [0.0; 1],
 			}]),
 			usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
 		});
@@ -463,6 +465,7 @@ impl Renderer {
 			width,
 			height,
 			position,
+			scale_factor,
 			is_pending_resize: false,
 			clear_color: wgpu::Color::BLACK,
 			viewport_buffer,
@@ -482,19 +485,20 @@ impl Renderer {
 	}
 
 	// Resize the renderer to a requested size.
-	pub fn resize(&mut self, width: u32, height: u32) {
+	pub fn resize(&mut self, width: u32, height: u32, scale_factor: f32) {
 		// We ensure the requested size has nonzero dimensions before applying it.
 		if width > 0 && height > 0 {
 			self.width = width;
 			self.height = height;
 			self.config.width = width;
 			self.config.height = height;
+			self.scale_factor = scale_factor;
 			self.surface.configure(&self.device, &self.config);
 			self.is_pending_resize = true;
 		}
 	}
 
-	pub fn reposition(&mut self, position: [f32; 2]) {
+	pub fn reposition(&mut self, position: Vex<2, Lx>) {
 		if self.position != position {
 			self.position = position;
 			self.is_pending_resize = true;
@@ -510,8 +514,10 @@ impl Renderer {
 				&self.viewport_buffer,
 				0,
 				bytemuck::cast_slice(&[ViewportUniform {
-					position: self.position,
+					position: self.position.0.map(Into::into),
 					size: [self.width as f32, self.height as f32],
+					scale: self.scale_factor,
+					_padding: [0.0; 1],
 				}]),
 			);
 			self.is_pending_resize = false;
@@ -537,11 +543,11 @@ impl Renderer {
 				DrawCommand::Card { position, dimensions, color, radius } => {
 					let instance_start = card_instances.len() as u32;
 					card_instances.push(CardInstance {
-						position,
-						dimensions,
+						position: position.0.map(|n| n.0),
+						dimensions: dimensions.0.map(|n| n.0),
 						color: color.map(srgb8_to_f32),
 						depth: 0.,
-						radius,
+						radius: radius.0,
 					});
 					render_commands.push(RenderCommand::Card(instance_start..instance_start + 1));
 				},
@@ -554,9 +560,9 @@ impl Renderer {
 				} => {
 					let ring_instance_start = color_ring_instances.len() as u32;
 					color_ring_instances.push(ColorRingInstance {
-						position,
-						radius_major: hole_radius + ring_width,
-						radius_minor: hole_radius,
+						position: position.0.map(|n| n.0),
+						radius_major: (hole_radius + ring_width).0,
+						radius_minor: hole_radius.0,
 						depth: 0.,
 						saturation_value: [hsv[1], hsv[2]],
 					});
@@ -564,8 +570,8 @@ impl Renderer {
 
 					let trigon_instance_start = color_trigon_instances.len() as u32;
 					color_trigon_instances.push(ColorTrigonInstance {
-						position: position.map(|n| n + ring_width + hole_radius - trigon_radius),
-						radius: trigon_radius,
+						position: position.map(|n| n + ring_width + hole_radius - trigon_radius).0.map(|n| n.0),
+						radius: trigon_radius.0,
 						hue: hsv[0],
 						depth: 0.,
 					});
@@ -574,7 +580,7 @@ impl Renderer {
 			}
 		}
 
-		self.trimesh_vertex_buffer.write(&self.device, &self.queue, strokes_vertices, Vertex { position: [0.; 3], color: [0.; 4] });
+		self.trimesh_vertex_buffer.write(&self.device, &self.queue, strokes_vertices, Vertex { position: [Lx(0.); 3], color: [0.; 4] });
 		self.trimesh_index_buffer.write(&self.device, &self.queue, strokes_indices, 0);
 
 		self.card_instance_buffer.write(

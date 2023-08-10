@@ -9,7 +9,6 @@ use std::time::{Duration, Instant};
 
 use enumset::EnumSet;
 use fast_srgb8::srgb8_to_f32;
-use vek::Vec2;
 use winit::{
 	dpi::{PhysicalPosition, PhysicalSize},
 	event::*,
@@ -23,6 +22,7 @@ use crate::linux::*;
 use crate::wintab::*;
 use crate::{
 	input::{Button, InputMonitor, Key},
+	pixel::{Lx, Px, Vex, Zero},
 	render::{DrawCommand, Renderer},
 	stroke::{Canvas, Stroke},
 };
@@ -41,8 +41,8 @@ fn hsv_to_srgba8(hsv: [f32; 3]) -> [u8; 4] {
 }
 
 struct PanOrigin {
-	cursor: Vec2<f64>,
-	position: Vec2<f32>,
+	cursor: Vex<2, Lx>,
+	position: Vex<2, Lx>,
 }
 
 enum ColorSelectionPart {
@@ -52,10 +52,10 @@ enum ColorSelectionPart {
 
 enum Mode {
 	Drawing { current_stroke: Option<Stroke> },
-	Selecting { origin: Option<Vec2<f32>> },
+	Selecting { origin: Option<Vex<2, Lx>> },
 	Panning { origin: Option<PanOrigin> },
-	Moving { origin: Option<Vec2<f32>> },
-	ChoosingColor { cursor_origin: Vec2<f32>, part: Option<ColorSelectionPart> },
+	Moving { origin: Option<Vex<2, Lx>> },
+	ChoosingColor { cursor_physical_origin: Vex<2, Px>, part: Option<ColorSelectionPart> },
 }
 
 struct ModeStack {
@@ -88,10 +88,10 @@ impl ModeStack {
 		}
 	}
 
-	pub fn temp_choose(&mut self, cursor_origin: Option<Vec2<f32>>) {
-		if let Some(cursor_origin) = cursor_origin {
+	pub fn temp_choose(&mut self, cursor_physical_origin: Option<Vex<2, Px>>) {
+		if let Some(cursor_physical_origin) = cursor_physical_origin {
 			if !matches!(self.get(), &Mode::ChoosingColor { .. }) {
-				self.transient_mode = Some(Mode::ChoosingColor { cursor_origin, part: None });
+				self.transient_mode = Some(Mode::ChoosingColor { cursor_physical_origin, part: None });
 			}
 		} else {
 			if matches!(self.get(), &Mode::ChoosingColor { .. }) {
@@ -146,13 +146,24 @@ impl ModeStack {
 }
 
 // TODO: Move this somewhere saner.
-// Color selector constants
-const TRIGON_RADIUS: f32 = 102.;
-const HOLE_RADIUS: f32 = 120.;
-const RING_WIDTH: f32 = 42.;
+// Color selector constants in logical pixels/points.
+const TRIGON_RADIUS: Lx = Lx(68.);
+const HOLE_RADIUS: Lx = Lx(80.);
+const RING_WIDTH: Lx = Lx(28.);
+const OUTLINE_WIDTH: Lx = Lx(2.);
+const SATURATION_VALUE_WINDOW_DIAMETER: Lx = Lx(8.);
 
 pub enum ClipboardContents {
 	Subcanvas(Vec<Stroke>),
+}
+
+// Scale factor closures.
+const fn make_l2p(scale_factor: f32) -> impl Fn(Lx) -> Px + Copy {
+	move |Lx(a)| Px(a * scale_factor)
+}
+
+const fn make_p2l(scale_factor: f32) -> impl Fn(Px) -> Lx + Copy {
+	move |Px(a)| Lx(a / scale_factor)
 }
 
 // Current state of our app.
@@ -161,9 +172,9 @@ pub struct App {
 	pending_resize: Option<winit::dpi::PhysicalSize<u32>>,
 	should_redraw: bool,
 	renderer: Renderer,
-	cursor_x: f64,
-	cursor_y: f64,
-	position: [f32; 2],
+	scale_factor: f32,
+	cursor_physical_position: Vex<2, Px>,
+	position: Vex<2, Lx>,
 	is_cursor_relevant: bool,
 	tablet_context: Option<TabletContext>,
 	pressure: Option<f64>,
@@ -190,9 +201,10 @@ impl App {
 		let tablet_context = TabletContext::new(&window);
 
 		// Set up the renderer.
-		let position = [0.; 2];
+		let position = Vex::ZERO;
 		let size = window.inner_size();
-		let mut renderer = Renderer::new(&window, position, size.width, size.height);
+		let scale_factor = window.scale_factor() as f32;
+		let mut renderer = Renderer::new(&window, position, size.width, size.height, scale_factor);
 
 		// Make the window visible and immediately clear color to prevent a flash.
 		renderer.clear_color = wgpu::Color {
@@ -212,8 +224,8 @@ impl App {
 			pending_resize: None,
 			should_redraw: false,
 			renderer,
-			cursor_x: 0.,
-			cursor_y: 0.,
+			scale_factor,
+			cursor_physical_position: Vex::ZERO,
 			position,
 			is_cursor_relevant: false,
 			tablet_context,
@@ -254,17 +266,15 @@ impl App {
 						delta: MouseScrollDelta::LineDelta(lines, rows), ..
 					} => {
 						// Negative multiplier = reverse scrolling; positive multiplier = natural scrolling.
-						self.position[0] = self.position[0] + lines * -48.;
-						self.position[1] = self.position[1] + rows * -48.;
+						self.position = self.position + Vex([*lines, *rows].map(Lx)) * -32.;
 						self.renderer.reposition(self.position);
 					},
 					WindowEvent::CursorMoved { position, .. } => {
-						self.cursor_x = position.x;
-						self.cursor_y = position.y;
+						self.cursor_physical_position = Vex([position.x as _, position.y as _].map(Px));
 					},
 					WindowEvent::CursorEntered { .. } => {
 						self.is_cursor_relevant = true;
-						self.tablet_context.as_mut().map(|c| c.enable(true).unwrap());
+						self.tablet_context.as_mut().map(|c: &mut TabletContext| c.enable(true).unwrap());
 					},
 					WindowEvent::CursorLeft { .. } => {
 						self.is_cursor_relevant = false;
@@ -275,7 +285,8 @@ impl App {
 					WindowEvent::Resized(physical_size) => {
 						self.pending_resize = Some(*physical_size);
 					},
-					WindowEvent::ScaleFactorChanged { new_inner_size, .. } => {
+					WindowEvent::ScaleFactorChanged { scale_factor, new_inner_size } => {
+						self.scale_factor = *scale_factor as f32;
 						self.pending_resize = Some(**new_inner_size);
 					},
 
@@ -301,7 +312,7 @@ impl App {
 
 					match self.repaint() {
 						Ok(_) => {},
-						Err(wgpu::SurfaceError::Lost) => self.renderer.resize(self.renderer.width, self.renderer.height),
+						Err(wgpu::SurfaceError::Lost) => self.renderer.resize(self.renderer.width, self.renderer.height, self.renderer.scale_factor),
 						Err(wgpu::SurfaceError::OutOfMemory) => *control_flow = ControlFlow::Exit,
 						Err(e) => eprintln!("{:?}", e),
 					}
@@ -322,10 +333,14 @@ impl App {
 
 	fn repaint(&mut self) -> Result<(), wgpu::SurfaceError> {
 		let mut draw_commands = vec![];
+		let l2p = make_l2p(self.scale_factor);
+		let p2l = make_p2l(self.scale_factor);
+
+		let cursor_logical_position = self.cursor_physical_position.map(p2l);
 
 		// Draw brushstrokes.
 		let selection_offset = if let Mode::Moving { origin: Some(origin) } = &self.mode_stack.base_mode {
-			Some(Vec2::from(self.position) + Vec2::new(self.cursor_x, self.cursor_y).as_::<f32>() - *origin)
+			Some(self.position + cursor_logical_position - *origin)
 		} else {
 			None
 		};
@@ -337,80 +352,80 @@ impl App {
 
 		// Draw selection rectangles.
 		if let Mode::Selecting { origin: Some(origin) } = &self.mode_stack.get() {
-			let current = Vec2::<f32>::from(self.position) + Vec2::new(self.cursor_x, self.cursor_y).as_::<f32>();
+			let current = self.position + cursor_logical_position;
+			let topleft = Vex([current[0].min(origin[0]), current[1].min(origin[1])]) - self.position;
 			draw_commands.push(DrawCommand::Card {
-				position: [current.x.min(origin.x), current.y.min(origin.y)],
-				dimensions: [(current.x - origin.x).abs(), (current.y - origin.y).abs()],
+				position: topleft.map(l2p),
+				dimensions: (current - origin).map(|n| n.abs()).map(l2p),
 				color: [0x22, 0xae, 0xd1, 0x33],
-				radius: 0.,
+				radius: Px(0.),
 			});
 		}
 
 		// Draw color selector.
-		if let Mode::ChoosingColor { cursor_origin, .. } = self.mode_stack.get() {
+		if let Mode::ChoosingColor { cursor_physical_origin: cursor_origin, .. } = self.mode_stack.get() {
 			draw_commands.push(DrawCommand::ColorSelector {
-				position: (cursor_origin - HOLE_RADIUS - RING_WIDTH).into_array(),
+				position: cursor_origin.map(|x| x - l2p(HOLE_RADIUS + RING_WIDTH)),
 				hsv: self.current_color,
-				trigon_radius: TRIGON_RADIUS,
-				hole_radius: HOLE_RADIUS,
-				ring_width: RING_WIDTH,
+				trigon_radius: l2p(TRIGON_RADIUS),
+				hole_radius: l2p(HOLE_RADIUS),
+				ring_width: l2p(RING_WIDTH),
 			});
 
 			let srgba8 = hsv_to_srgba8(self.current_color);
 
 			let ring_position = cursor_origin
-				+ Vec2::new(
-					(HOLE_RADIUS + RING_WIDTH / 2.) * -(self.current_color[0] * 2. * core::f32::consts::PI).cos(),
-					(HOLE_RADIUS + RING_WIDTH / 2.) * -(self.current_color[0] * 2. * core::f32::consts::PI).sin(),
-				);
+				+ Vex([
+					l2p(HOLE_RADIUS + RING_WIDTH / 2.) * -(self.current_color[0] * 2. * core::f32::consts::PI).cos(),
+					l2p(HOLE_RADIUS + RING_WIDTH / 2.) * -(self.current_color[0] * 2. * core::f32::consts::PI).sin(),
+				]);
 
-			let hue_outline_width = RING_WIDTH + 12.;
-			let hue_frame_width = RING_WIDTH + 6.;
-			let hue_window_width = RING_WIDTH;
+			let hue_outline_width = l2p(RING_WIDTH + 4. * OUTLINE_WIDTH);
+			let hue_frame_width = l2p(RING_WIDTH + 2. * OUTLINE_WIDTH);
+			let hue_window_width = l2p(RING_WIDTH);
 			draw_commands.push(DrawCommand::Card {
-				position: (ring_position - hue_outline_width / 2. + self.position).into_array(),
-				dimensions: [hue_outline_width; 2],
+				position: ring_position.map(|x| x - hue_outline_width / 2.),
+				dimensions: Vex([hue_outline_width; 2]),
 				color: [0xff; 4],
 				radius: hue_outline_width / 2.,
 			});
 			draw_commands.push(DrawCommand::Card {
-				position: (ring_position - hue_frame_width / 2. + self.position).into_array(),
-				dimensions: [hue_frame_width; 2],
+				position: ring_position.map(|x| x - hue_frame_width / 2.),
+				dimensions: Vex([hue_frame_width; 2]),
 				color: [0x00, 0x00, 0x00, 0xff],
 				radius: hue_frame_width / 2.,
 			});
 			draw_commands.push(DrawCommand::Card {
-				position: (ring_position - hue_window_width / 2. + self.position).into_array(),
-				dimensions: [hue_window_width; 2],
+				position: ring_position.map(|x| x - hue_window_width / 2.),
+				dimensions: Vex([hue_window_width; 2]),
 				color: srgba8,
 				radius: hue_window_width / 2.,
 			});
 
 			let trigon_position = cursor_origin
-				+ TRIGON_RADIUS
-					* Vec2::new(
-						3.0f32.sqrt() * (self.current_color[2] - 0.5 * (self.current_color[1] * self.current_color[2] + 1.)),
-						0.5 * (1. - 3. * self.current_color[1] * self.current_color[2]),
-					);
+				+ Vex([
+					3.0f32.sqrt() * (self.current_color[2] - 0.5 * (self.current_color[1] * self.current_color[2] + 1.)),
+					0.5 * (1. - 3. * self.current_color[1] * self.current_color[2]),
+				]) * l2p(TRIGON_RADIUS);
 
-			let sv_window_width = 12.;
-			let sv_outline_width = sv_window_width + 12.;
-			let sv_frame_width = sv_window_width + 6.;
+			let sv_outline_width = l2p(SATURATION_VALUE_WINDOW_DIAMETER + (4. * OUTLINE_WIDTH));
+			let sv_frame_width = l2p(SATURATION_VALUE_WINDOW_DIAMETER + (2. * OUTLINE_WIDTH));
+			let sv_window_width = l2p(SATURATION_VALUE_WINDOW_DIAMETER);
 			draw_commands.push(DrawCommand::Card {
-				position: (trigon_position - sv_outline_width / 2. + self.position).into_array(),
-				dimensions: [sv_outline_width; 2],
+				position: trigon_position.map(|x| x - sv_outline_width / 2.),
+				dimensions: Vex([sv_outline_width; 2]),
 				color: [0xff; 4],
 				radius: sv_outline_width / 2.,
 			});
 			draw_commands.push(DrawCommand::Card {
-				position: (trigon_position - sv_frame_width / 2. + self.position).into_array(),
-				dimensions: [sv_frame_width; 2],
+				position: trigon_position.map(|x| x - sv_frame_width / 2.),
+				dimensions: Vex([sv_frame_width; 2]),
 				color: [0x00, 0x00, 0x00, 0xff],
 				radius: sv_frame_width / 2.,
 			});
 			draw_commands.push(DrawCommand::Card {
-				position: (trigon_position - sv_window_width / 2. + self.position).into_array(),
-				dimensions: [sv_window_width; 2],
+				position: trigon_position.map(|x| x - sv_window_width / 2.),
+				dimensions: Vex([sv_window_width; 2]),
 				color: srgba8,
 				radius: sv_window_width / 2.,
 			});
@@ -436,6 +451,10 @@ impl App {
 		use Button::*;
 		use Key::*;
 
+		let p2l = make_p2l(self.scale_factor);
+		let l2p = make_l2p(self.scale_factor);
+		let cursor_logical_position = self.cursor_physical_position.map(p2l);
+
 		if self.input_monitor.is_fresh {
 			self.should_redraw = true;
 
@@ -454,8 +473,11 @@ impl App {
 				}
 				self.is_fullscreen = !self.is_fullscreen;
 			}
+			if self.input_monitor.should_trigger(LControl, F) {
+				self.window.set_maximized(!self.window.is_maximized());
+			}
 			if self.input_monitor.should_trigger(LControl, X) {
-				let offset = Vec2::new(self.cursor_x as f32, self.cursor_y as f32) + Vec2::from(self.position);
+				let offset = cursor_logical_position + self.position;
 				self.clipboard_contents = Some(ClipboardContents::Subcanvas(
 					self.canvas
 						.strokes
@@ -472,7 +494,7 @@ impl App {
 				));
 			}
 			if self.input_monitor.should_trigger(LControl, C) {
-				let offset = Vec2::new(self.cursor_x as f32, self.cursor_y as f32) + Vec2::from(self.position);
+				let offset = cursor_logical_position + self.position;
 				self.clipboard_contents = Some(ClipboardContents::Subcanvas(
 					self.canvas
 						.strokes
@@ -492,7 +514,7 @@ impl App {
 					for stroke in self.canvas.strokes.iter_mut() {
 						stroke.is_selected = false;
 					}
-					let offset = Vec2::new(self.cursor_x as f32, self.cursor_y as f32) + Vec2::from(self.position);
+					let offset = cursor_logical_position + self.position;
 					self.canvas.strokes.extend(strokes.iter().map(|stroke| Stroke {
 						origin: stroke.origin + offset,
 						color: stroke.color,
@@ -539,9 +561,9 @@ impl App {
 			}
 			if self.input_monitor.was_discovered(EnumSet::EMPTY, Tab) {
 				self.mode_stack.temp_choose(Some(if self.is_cursor_relevant {
-					Vec2::new(self.cursor_x as f32, self.cursor_y as f32)
+					self.cursor_physical_position
 				} else {
-					Vec2::new(self.renderer.width as f32 / 2., self.renderer.height as f32 / 2.)
+					Vex([self.renderer.width as f32 / 2., self.renderer.height as f32 / 2.].map(Px))
 				}));
 			} else if self.input_monitor.was_undiscovered(EnumSet::EMPTY, Tab) {
 				self.mode_stack.temp_choose(None);
@@ -558,24 +580,25 @@ impl App {
 					}
 
 					if let Some(current_stroke) = current_stroke {
-						current_stroke.add_point(self.position[0] + self.cursor_x as f32, self.position[1] + self.cursor_y as f32, self.pressure.map_or(1., |pressure| (pressure / 32767.) as f32))
+						let offset = cursor_logical_position + self.position;
+						current_stroke.add_point(offset, self.pressure.map_or(1., |pressure| (pressure / 32767.) as f32))
 					}
 				} else {
 					self.canvas.strokes.extend(current_stroke.take());
 				}
 			},
 			Mode::Selecting { origin } => {
+				let offset = cursor_logical_position + self.position;
 				self.window.set_cursor_icon(winit::window::CursorIcon::Crosshair);
 
 				if self.input_monitor.active_buttons.contains(Left) {
 					if self.input_monitor.different_buttons.contains(Left) && origin.is_none() {
-						*origin = Some(Vec2::from(self.position) + Vec2::new(self.cursor_x, self.cursor_y).as_::<f32>());
+						*origin = Some(offset);
 					}
 				} else {
 					if let Some(origin) = origin.take() {
-						let current = Vec2::<f32>::from(self.position) + Vec2::new(self.cursor_x, self.cursor_y).as_::<f32>();
-						let min = Vec2::new(current.x.min(origin.x), current.y.min(origin.y));
-						let max = Vec2::new(current.x.max(origin.x), current.y.max(origin.y));
+						let min = Vex([offset[0].min(origin[0]), offset[1].min(origin[1])]);
+						let max = Vex([offset[0].max(origin[0]), offset[1].max(origin[1])]);
 						self.canvas.select(min, max, self.input_monitor.active_keys.contains(LShift));
 					}
 				}
@@ -585,8 +608,8 @@ impl App {
 					self.window.set_cursor_icon(winit::window::CursorIcon::Grabbing);
 					if origin.is_none() {
 						*origin = Some(PanOrigin {
-							cursor: Vec2::new(self.cursor_x, self.cursor_y),
-							position: Vec2::from(self.position),
+							cursor: cursor_logical_position,
+							position: self.position,
 						});
 					}
 				} else {
@@ -597,7 +620,7 @@ impl App {
 				}
 
 				if let Some(origin) = origin {
-					self.position = (origin.position - (Vec2::new(self.cursor_x, self.cursor_y) - origin.cursor).as_::<f32>()).into_array();
+					self.position = origin.position - (cursor_logical_position - origin.cursor);
 					self.renderer.reposition(self.position);
 				}
 			},
@@ -606,11 +629,11 @@ impl App {
 
 				if self.input_monitor.active_buttons.contains(Left) {
 					if self.input_monitor.different_buttons.contains(Left) && origin.is_none() {
-						*origin = Some(Vec2::from(self.position) + Vec2::new(self.cursor_x, self.cursor_y).as_::<f32>());
+						*origin = Some(self.position + cursor_logical_position);
 					}
 				} else {
 					if let Some(origin) = origin.take() {
-						let selection_offset = Vec2::<f32>::from(self.position) + Vec2::new(self.cursor_x, self.cursor_y).as_::<f32>() - origin;
+						let selection_offset = self.position + cursor_logical_position - origin;
 
 						for stroke in self.canvas.strokes.iter_mut().filter(|x| x.is_selected) {
 							stroke.origin = stroke.origin + selection_offset;
@@ -618,34 +641,34 @@ impl App {
 					}
 				}
 			},
-			Mode::ChoosingColor { cursor_origin, part } => {
+			Mode::ChoosingColor { cursor_physical_origin, part } => {
 				self.window.set_cursor_icon(winit::window::CursorIcon::Crosshair);
 
 				if self.input_monitor.active_buttons.contains(Left) {
-					let cursor = Vec2::new(self.cursor_x as f32, self.cursor_y as f32);
-					let vector = cursor - *cursor_origin;
+					let cursor = self.cursor_physical_position;
+					let vector = cursor - *cursor_physical_origin;
 					if part.is_none() && self.input_monitor.different_buttons.contains(Left) {
-						let magnitude = vector.magnitude();
-						if magnitude >= HOLE_RADIUS && magnitude <= HOLE_RADIUS + RING_WIDTH {
+						let magnitude = vector.norm();
+						if magnitude >= l2p(HOLE_RADIUS) && magnitude <= l2p(HOLE_RADIUS + RING_WIDTH) {
 							*part = Some(ColorSelectionPart::Hue);
-						} else if 2. * vector.y < TRIGON_RADIUS && -(3.0f32.sqrt()) * vector.x - vector.y < TRIGON_RADIUS && (3.0f32.sqrt()) * vector.x - vector.y < TRIGON_RADIUS {
+						} else if 2. * vector[1] < l2p(TRIGON_RADIUS) && -(3.0f32.sqrt()) * vector[0] - vector[1] < l2p(TRIGON_RADIUS) && (3.0f32.sqrt()) * vector[0] - vector[1] < l2p(TRIGON_RADIUS) {
 							*part = Some(ColorSelectionPart::SaturationValue);
 						}
 					}
 
 					match part {
 						Some(ColorSelectionPart::Hue) => {
-							self.current_color[0] = vector.y.atan2(vector.x) / (2.0 * std::f32::consts::PI) + 0.5;
+							self.current_color[0] = vector[1].0.atan2(vector[0].0) / (2.0 * std::f32::consts::PI) + 0.5;
 						},
 						Some(ColorSelectionPart::SaturationValue) => {
-							let scaled_vector = vector / TRIGON_RADIUS;
-							let other = Vec2::new(-(3.0f32.sqrt()) / 2., -1. / 2.);
+							let scaled_vector = vector / l2p(TRIGON_RADIUS);
+							let other = Vex([-(3.0f32.sqrt()) / 2., -1. / 2.]);
 							let dot = other.dot(scaled_vector);
-							let scaled_vector = scaled_vector + ((dot - dot.min(0.5)) * -other);
-							let scaled_vector = Vec2::new(scaled_vector.x.max(-3.0f32.sqrt() / 2.), scaled_vector.y.min(0.5));
-							let s = (1. - 2. * scaled_vector.y) / (2. + 3.0f32.sqrt() * scaled_vector.x - scaled_vector.y);
+							let scaled_vector = scaled_vector + -other * (dot - dot.min(0.5));
+							let scaled_vector = Vex([scaled_vector[0].max(-3.0f32.sqrt() / 2.), scaled_vector[1].min(0.5)]);
+							let s = (1. - 2. * scaled_vector[1]) / (2. + 3.0f32.sqrt() * scaled_vector[0] - scaled_vector[1]);
 							self.current_color[1] = if s.is_nan() { 0. } else { s.clamp(0., 1.) };
-							self.current_color[2] = ((2. + 3.0f32.sqrt() * scaled_vector.x - scaled_vector.y) / 3.).clamp(0., 1.);
+							self.current_color[2] = ((2. + 3.0f32.sqrt() * scaled_vector[0] - scaled_vector[1]) / 3.).clamp(0., 1.);
 						},
 						None => {},
 					}
@@ -662,7 +685,7 @@ impl App {
 	fn update_renderer(&mut self) {
 		// Apply a resize if necessary; resizes are time-intensive.
 		if let Some(size) = self.pending_resize.take() {
-			self.renderer.resize(size.width, size.height);
+			self.renderer.resize(size.width, size.height, self.scale_factor);
 		}
 
 		self.renderer.update();

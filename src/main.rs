@@ -7,12 +7,15 @@
 
 #![feature(array_windows)]
 #![feature(extract_if)]
-#![windows_subsystem = "windows"]
+#![feature(maybe_uninit_uninit_array_transpose)]
+// We disable windows_subsystem = "windows" in debug mode to show wgpu validation errors.
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod app;
 mod buffer;
 mod input;
 mod linux;
+mod pixel;
 mod render;
 mod stroke;
 mod wintab;

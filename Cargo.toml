@@ -12,14 +12,13 @@ winit = "0.28.6"
 env_logger = "0.10"
 log = "0.4"
 wgpu = {version = "0.16", features = ["vulkan-portability"]}
-wgpu_glyph = "0.20"
 raw-window-handle = "0.5"
 pollster = "0.3"
 bytemuck = { version = "1.12.1", features = [ "derive", "min_const_generics" ] }
 bitflags = "2.3.3"
 fast-srgb8 = "1.0"
-vek = "0.16.1"
 enumset = "1.1.2"
+derive_more = "0.99.17"
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = "0.48"

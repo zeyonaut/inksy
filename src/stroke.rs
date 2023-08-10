@@ -6,42 +6,41 @@
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
 use fast_srgb8::srgb8_to_f32;
-use vek::Vec2;
 
-use crate::render::Vertex;
+use crate::{
+	pixel::{Lx, Lx2, Vex, Zero},
+	render::Vertex,
+};
 
 #[derive(Clone)]
 pub struct Point {
-	position: Vec2<f32>,
+	position: Vex<2, Lx>,
 	pressure: f32,
 }
 
 #[derive(Clone)]
 pub struct Stroke {
-	pub origin: Vec2<f32>,
+	pub origin: Vex<2, Lx>,
 	pub color: [u8; 4],
 	pub points: Vec<Point>,
 	pub is_selected: bool,
 }
 
-const STROKE_RADIUS: f32 = 8.;
+const STROKE_RADIUS: Lx = Lx(4.);
 
 impl Stroke {
-	pub fn new(origin: [f32; 2], color: [u8; 4]) -> Self {
+	pub fn new(origin: Vex<2, Lx>, color: [u8; 4]) -> Self {
 		Self {
-			origin: Vec2::from(origin),
+			origin,
 			color,
 			points: Vec::new(),
 			is_selected: false,
 		}
 	}
 
-	pub fn add_point(&mut self, x: f32, y: f32, pressure: f32) {
-		if self.points.last().map_or(true, |point| (Vec2::new(x, y) - (self.origin + point.position)).magnitude() > 2.) {
-			self.points.push(Point {
-				position: Vec2::new(x - self.origin.x, y - self.origin.y),
-				pressure,
-			});
+	pub fn add_point(&mut self, position: Vex<2, Lx>, pressure: f32) {
+		if self.points.last().map_or(true, |point| (position - (self.origin + point.position)).norm() > Lx(2.)) {
+			self.points.push(Point { position: position - self.origin, pressure });
 		}
 	}
 }
@@ -55,20 +54,20 @@ impl Canvas {
 		Self { strokes: Vec::new() }
 	}
 
-	pub fn select(&mut self, min: Vec2<f32>, max: Vec2<f32>, should_aggregate: bool) {
+	pub fn select(&mut self, min: Vex<2, Lx>, max: Vex<2, Lx>, should_aggregate: bool) {
 		'strokes: for stroke in self.strokes.iter_mut() {
 			let min = min - stroke.origin;
 			let max = max - stroke.origin;
 			if should_aggregate {
 				for point in stroke.points.iter() {
-					if point.position.x >= min.x && point.position.y >= min.y && point.position.x <= max.x && point.position.y <= max.y {
+					if point.position[0] >= min[0] && point.position[1] >= min[1] && point.position[0] <= max[0] && point.position[1] <= max[1] {
 						stroke.is_selected = !stroke.is_selected;
 						continue 'strokes;
 					}
 				}
 			} else {
 				for point in stroke.points.iter() {
-					if point.position.x >= min.x && point.position.y >= min.y && point.position.x <= max.x && point.position.y <= max.y {
+					if point.position[0] >= min[0] && point.position[1] >= min[1] && point.position[0] <= max[0] && point.position[1] <= max[1] {
 						stroke.is_selected = true;
 						continue 'strokes;
 					}
@@ -78,33 +77,33 @@ impl Canvas {
 		}
 	}
 
-	pub fn bake(&self, current_stroke: Option<&Stroke>, selection_offset: Option<Vec2<f32>>) -> (Vec<Vertex>, Vec<u16>) {
+	pub fn bake(&self, current_stroke: Option<&Stroke>, selection_offset: Option<Vex<2, Lx>>) -> (Vec<Vertex>, Vec<u16>) {
 		let mut vertices = vec![];
 		let mut indices = vec![];
 
-		for stroke in self.strokes.iter().chain(current_stroke.into_iter()) {
-			let stroke_offset = if stroke.is_selected { selection_offset.unwrap_or(Vec2::zero()) } else { Vec2::zero() };
+		for stroke in self.strokes.iter().chain(current_stroke) {
+			let stroke_offset = if stroke.is_selected { selection_offset.unwrap_or(Vex::ZERO) } else { Vex::ZERO };
 
 			let perpendiculars = stroke
 				.points
 				.array_windows::<2>()
 				.map(|[a, b]| {
 					let forward = b.position - a.position;
-					Vec2::new(forward.y, -forward.x).normalized() * STROKE_RADIUS
+					Vex([forward[1], -forward[0]]).normalized() * STROKE_RADIUS
 				})
 				.collect::<Vec<_>>();
 
 			if stroke.is_selected {
 				let stroke_index = u16::try_from(vertices.len()).unwrap();
 
-				const BORDER_RADIUS: f32 = 6.;
+				const BORDER_RADIUS: Lx = Lx(6.);
 				let mut positions = vec![];
 				let border_perpendiculars = stroke
 					.points
 					.array_windows::<2>()
 					.map(|[a, b]| {
 						let forward = b.position - a.position;
-						Vec2::new(forward.y, -forward.x).normalized() * BORDER_RADIUS
+						Vex([forward[1], -forward[0]]).normalized() * BORDER_RADIUS
 					})
 					.collect::<Vec<_>>();
 
@@ -116,19 +115,19 @@ impl Canvas {
 
 				for (i, [p, q]) in perpendiculars.array_windows::<2>().enumerate() {
 					let i = u16::try_from(i).unwrap();
-					let cross_product = p.x * q.y - p.y * q.x;
+					let cross_product = p.cross(*q);
 
-					if cross_product > 0. {
+					if cross_product > Lx2(0.) {
 						/* Clockwise */
 						indices.extend([2, 4 + 0, 4 + 1].map(|n| stroke_index + n + i * 4));
-					} else if cross_product < 0. {
+					} else if cross_product < Lx2(0.) {
 						/* Counterclockwise */
 						indices.extend([3, 4 + 1, 4 + 0].map(|n| stroke_index + n + i * 4));
 					}
 				}
 
 				vertices.extend(positions.into_iter().map(|position| Vertex {
-					position: [position.x, position.y, 0.],
+					position: [position[0], position[1], Lx(0.)],
 					color: [0x28, 0xc2, 0xff, 0xff].map(srgb8_to_f32),
 				}));
 			}
@@ -144,19 +143,19 @@ impl Canvas {
 
 			for (i, [p, q]) in perpendiculars.array_windows::<2>().enumerate() {
 				let i = u16::try_from(i).unwrap();
-				let cross_product = p.x * q.y - p.y * q.x;
+				let cross_product = p.cross(*q);
 
-				if cross_product > 0. {
+				if cross_product > Lx2(0.) {
 					/* Clockwise */
 					indices.extend([2, 4 + 0, 4 + 1].map(|n| stroke_index + n + i * 4));
-				} else if cross_product < 0. {
+				} else if cross_product < Lx2(0.) {
 					/* Counterclockwise */
 					indices.extend([3, 4 + 1, 4 + 0].map(|n| stroke_index + n + i * 4));
 				}
 			}
 
 			vertices.extend(positions.into_iter().map(|position| Vertex {
-				position: [position.x, position.y, 0.],
+				position: [position[0], position[1], Lx(0.)],
 				color: stroke.color.map(srgb8_to_f32),
 			}));
 		}
