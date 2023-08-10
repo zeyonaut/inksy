@@ -14,7 +14,7 @@ use wgpu::{util::DeviceExt, SurfaceTexture, VertexBufferLayout};
 
 use crate::{
 	buffer::DynamicBuffer,
-	pixel::{Lx, Px, Vex},
+	pixel::{Px, Vex, Vx},
 };
 
 const SHOULD_MULTISAMPLE: bool = false;
@@ -36,7 +36,7 @@ pub enum RenderCommand {
 #[repr(C)]
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct Vertex {
-	pub position: [Lx; 3],
+	pub position: [Vx; 3],
 	pub color: [f32; 4],
 }
 
@@ -138,7 +138,8 @@ pub struct Renderer {
 	config: wgpu::SurfaceConfiguration,
 	pub width: u32,
 	pub height: u32,
-	pub position: Vex<2, Lx>,
+	pub position: Vex<2, Vx>,
+	pub zoom: f32,
 	pub scale_factor: f32,
 	pub is_pending_resize: bool,
 	pub clear_color: wgpu::Color,
@@ -161,7 +162,7 @@ pub struct Renderer {
 
 impl Renderer {
 	// Create an instance of the renderer.
-	pub fn new<W>(window: &W, position: Vex<2, Lx>, width: u32, height: u32, scale_factor: f32) -> Self
+	pub fn new<W>(window: &W, position: Vex<2, Vx>, width: u32, height: u32, zoom: f32, scale_factor: f32) -> Self
 	where
 		W: HasRawWindowHandle + HasRawDisplayHandle,
 	{
@@ -444,7 +445,7 @@ impl Renderer {
 			contents: bytemuck::cast_slice(&[ViewportUniform {
 				position: [0., 0.],
 				size: [width as f32, height as f32],
-				scale: scale_factor,
+				scale: zoom * scale_factor,
 				_padding: [0.0; 1],
 			}]),
 			usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
@@ -484,6 +485,7 @@ impl Renderer {
 			width,
 			height,
 			position,
+			zoom,
 			scale_factor,
 			is_pending_resize: false,
 			clear_color: wgpu::Color::BLACK,
@@ -531,9 +533,16 @@ impl Renderer {
 		}
 	}
 
-	pub fn reposition(&mut self, position: Vex<2, Lx>) {
+	pub fn reposition(&mut self, position: Vex<2, Vx>) {
 		if self.position != position {
 			self.position = position;
+			self.is_pending_resize = true;
+		}
+	}
+
+	pub fn rezoom(&mut self, zoom: f32) {
+		if self.zoom != zoom {
+			self.zoom = zoom;
 			self.is_pending_resize = true;
 		}
 	}
@@ -549,7 +558,7 @@ impl Renderer {
 				bytemuck::cast_slice(&[ViewportUniform {
 					position: self.position.0.map(Into::into),
 					size: [self.width as f32, self.height as f32],
-					scale: self.scale_factor,
+					scale: self.zoom * self.scale_factor,
 					_padding: [0.0; 1],
 				}]),
 			);
@@ -613,7 +622,7 @@ impl Renderer {
 			}
 		}
 
-		self.trimesh_vertex_buffer.write(&self.device, &self.queue, strokes_vertices, Vertex { position: [Lx(0.); 3], color: [0.; 4] });
+		self.trimesh_vertex_buffer.write(&self.device, &self.queue, strokes_vertices, Vertex { position: [Vx(0.); 3], color: [0.; 4] });
 		self.trimesh_index_buffer.write(&self.device, &self.queue, strokes_indices, 0);
 
 		self.card_instance_buffer.write(

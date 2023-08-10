@@ -89,6 +89,22 @@ macro_rules! impl_new_f32 {
 			}
 		}
 
+		impl<'a> Div<&'a $Name> for $Name {
+			type Output = f32;
+
+			fn div(self, rhs: &'a $Name) -> Self::Output {
+				self.0 / rhs.0
+			}
+		}
+
+		impl<'a> Div<&'a mut $Name> for $Name {
+			type Output = f32;
+
+			fn div(self, rhs: &'a mut $Name) -> Self::Output {
+				self.0 / rhs.0
+			}
+		}
+
 		impl Mul<f32> for $Name {
 			type Output = Self;
 
@@ -134,6 +150,20 @@ macro_rules! impl_new_f32_dimensionality {
 	}
 }
 
+// A virtual pixel length.
+#[repr(transparent)]
+#[derive(Clone, Copy, derive_more::Add, derive_more::Sub, derive_more::Neg, derive_more::From, derive_more::Into, PartialEq, PartialOrd, Debug, derive_more::Display, bytemuck::Pod, bytemuck::Zeroable)]
+pub struct Vx(pub f32);
+
+// A virtual pixel area.
+#[repr(transparent)]
+#[derive(Clone, Copy, derive_more::Add, derive_more::Sub, derive_more::Neg, derive_more::From, derive_more::Into, PartialEq, PartialOrd, Debug, derive_more::Display, bytemuck::Pod, bytemuck::Zeroable)]
+pub struct Vx2(pub f32);
+
+impl_new_f32!(Vx);
+impl_new_f32!(Vx2);
+impl_new_f32_dimensionality! {length: Vx, area: Vx2}
+
 // A logical pixel length.
 #[repr(transparent)]
 #[derive(Clone, Copy, derive_more::Add, derive_more::Sub, derive_more::Neg, derive_more::From, derive_more::Into, PartialEq, PartialOrd, Debug, derive_more::Display, bytemuck::Pod, bytemuck::Zeroable)]
@@ -147,6 +177,40 @@ pub struct Lx2(pub f32);
 impl_new_f32!(Lx);
 impl_new_f32!(Lx2);
 impl_new_f32_dimensionality! {length: Lx, area: Lx2}
+
+// A zoom factor is a ratio between a logical pixel and a virtual pixel.
+#[repr(transparent)]
+#[derive(Clone, Copy)]
+pub struct Zoom(pub f32);
+
+impl Vx {
+	pub fn z(self, zoom: Zoom) -> Lx {
+		Lx(self.0 * zoom.0)
+	}
+}
+
+impl Lx {
+	pub fn z(self, zoom: Zoom) -> Vx {
+		Vx(self.0 / zoom.0)
+	}
+}
+
+// A scale is a ratio between a physical pixel and a logical pixel.
+#[repr(transparent)]
+#[derive(Clone, Copy)]
+pub struct Scale(pub f32);
+
+impl Lx {
+	pub fn s(self, scale: Scale) -> Px {
+		Px(self.0 * scale.0)
+	}
+}
+
+impl Px {
+	pub fn s(self, scale: Scale) -> Lx {
+		Lx(self.0 / scale.0)
+	}
+}
 
 // A physical pixel length.
 #[repr(transparent)]
@@ -429,4 +493,27 @@ where
 
 impl<const N: usize, T: Zero> Zero for Vex<N, T> {
 	const ZERO: Self = Self([T::ZERO; N]);
+}
+
+// Conveniences for scaling and zooming for vectors.
+impl<const N: usize> Vex<N, Vx> {
+	pub fn z(self, zoom: Zoom) -> Vex<N, Lx> {
+		self.map(|x| x.z(zoom))
+	}
+}
+
+impl<const N: usize> Vex<N, Lx> {
+	pub fn z(self, zoom: Zoom) -> Vex<N, Vx> {
+		self.map(|x| x.z(zoom))
+	}
+
+	pub fn s(self, scale: Scale) -> Vex<N, Px> {
+		self.map(|x| x.s(scale))
+	}
+}
+
+impl<const N: usize> Vex<N, Px> {
+	pub fn s(self, scale: Scale) -> Vex<N, Lx> {
+		self.map(|x| x.s(scale))
+	}
 }
