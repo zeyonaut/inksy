@@ -41,7 +41,7 @@ var<private> vertices: array<vec2<f32>, 4> = array<vec2<f32>, 4>(
 fn vs_main(shape: VertexInput, @builtin(vertex_index) index: u32, @builtin(instance_index) instance_index: u32) -> VertexOutput {
 	var out: VertexOutput;
 	let position = shape.position;
-	out.position = vec4<f32>((vertices[index] * shape.dimensions + position) / viewport.size * vec2<f32>(2.0, -2.0) + vec2<f32>(-1.0, 1.0), shape.depth, 1.0);
+	out.position = vec4<f32>((vertices[index] * (shape.dimensions + 4.) - 2. + position) / viewport.size * vec2<f32>(2.0, -2.0) + vec2<f32>(-1.0, 1.0), shape.depth, 1.0);
 	out.sposition = position;
 	out.dimensions = shape.dimensions;
 	out.color = shape.color;
@@ -50,10 +50,15 @@ fn vs_main(shape: VertexInput, @builtin(vertex_index) index: u32, @builtin(insta
 	return out;
 }
 
+fn blurred_step(edge: f32, value: f32) -> f32 {
+	let radius = 1./sqrt(2.) * length(vec2(dpdx(value), dpdy(value)));
+	return smoothstep(edge - radius, edge + radius, value);
+}
+
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
 	let rect_vertex = vec2(0.5, 0.5) * in.dimensions + vec2(-in.radius);
 	let rect_center = vec2(in.radius) + in.sposition + rect_vertex;
 	let frag_position = in.position.xy - rect_center;
-	return vec4(in.color.rgb, in.color.a * (1.0 - smoothstep(0.0, 1. / sqrt(2.), length(max(abs(frag_position), rect_vertex) - rect_vertex) - in.radius)));
+	return vec4(in.color.rgb, in.color.a * (1. - blurred_step(0., length(max(abs(frag_position), rect_vertex) - rect_vertex) - in.radius)));
 }

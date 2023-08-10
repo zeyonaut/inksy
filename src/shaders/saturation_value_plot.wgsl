@@ -38,7 +38,7 @@ var<private> vertices: array<vec2<f32>, 4> = array<vec2<f32>, 4>(
 fn vs_main(shape: VertexInput, @builtin(vertex_index) index: u32) -> VertexOutput {
 	var out: VertexOutput;
 	let position = shape.position;
-	out.position = vec4((vertices[index] * shape.radius + position) / viewport.size * vec2(2.0, -2.0) + vec2(-1.0, 1.0), shape.depth, 1.0);
+	out.position = vec4((vertices[index] * (shape.radius + 4.) - 2. + position) / viewport.size * vec2(2.0, -2.0) + vec2(-1.0, 1.0), shape.depth, 1.0);
 	out.origin = position + shape.radius;
 	out.radius = shape.radius;
 	out.hue = shape.hue;
@@ -60,6 +60,11 @@ fn srgb_to_linear(color: vec3<f32>) -> vec3<f32> {
 
 const PI: f32 = 3.141592653589793238462643383279;
 
+fn blurred_step(edge: f32, value: f32) -> f32 {
+	let radius = 1./sqrt(2.) * length(vec2(dpdx(value), dpdy(value)));
+	return smoothstep(edge - radius, edge + radius, value);
+}
+
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
 	let vector = in.position.xy - in.origin;
@@ -68,5 +73,5 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
 	let v = (2. + sqrt(3.) * scaled_vector.x - scaled_vector.y) / 3.;
 	let color_hsv = vec3(in.hue, s, v);
 	let color = srgb_to_linear(hsv_to_srgb(color_hsv));
-	return vec4(color, (1. - smoothstep(in.radius, in.radius + sqrt(2.), vector.y * 2.)) * (1. - smoothstep(in.radius, in.radius + sqrt(2.), -sqrt(3.) * vector.x - vector.y)) * (1. - smoothstep(in.radius, in.radius + sqrt(2.), sqrt(3.) * vector.x - vector.y)));
+	return vec4(color, (1. - blurred_step(in.radius / 2., vector.y * 2. / 2.)) * (1. - blurred_step(in.radius / 2., (-sqrt(3.) * vector.x - vector.y) / 2.)) * (1. - blurred_step(in.radius / 2., (sqrt(3.) * vector.x - vector.y) / 2.)));
 }
