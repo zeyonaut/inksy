@@ -97,14 +97,6 @@ macro_rules! impl_new_f32 {
 			}
 		}
 
-		impl<'a> Div<&'a mut $Name> for $Name {
-			type Output = f32;
-
-			fn div(self, rhs: &'a mut $Name) -> Self::Output {
-				self.0 / rhs.0
-			}
-		}
-
 		impl Mul<f32> for $Name {
 			type Output = Self;
 
@@ -334,6 +326,25 @@ impl<A> Vex<2, A> {
 	{
 		let (Vex([l_x, l_y]), Vex([r_x, r_y])) = (self, other);
 		l_x * r_y - l_y * r_x
+	}
+
+	pub fn angle(self) -> f32
+	where
+		A: Into<f32>,
+	{
+		let Vex([x, y]) = self;
+		y.into().atan2(x.into())
+	}
+}
+
+impl<A, B, C> Vex<2, A>
+where
+	A: Clone + Mul<f32, Output = B>,
+	B: Add<B, Output = C> + Sub<B, Output = C>,
+{
+	pub fn rotate(self, angle: f32) -> Vex<2, C> {
+		let Vex([x, y]) = self;
+		Vex([x.clone() * angle.cos() - y.clone() * angle.sin(), x * angle.sin() + y * angle.cos()])
 	}
 }
 

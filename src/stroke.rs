@@ -54,20 +54,20 @@ impl Canvas {
 		Self { strokes: Vec::new() }
 	}
 
-	pub fn select(&mut self, min: Vex<2, Vx>, max: Vex<2, Vx>, should_aggregate: bool) {
+	pub fn select(&mut self, min: Vex<2, Vx>, max: Vex<2, Vx>, tilt: f32, screen_center: Vex<2, Vx>, should_aggregate: bool) {
 		'strokes: for stroke in self.strokes.iter_mut() {
-			let min = min - stroke.origin;
-			let max = max - stroke.origin;
 			if should_aggregate {
 				for point in stroke.points.iter() {
-					if point.position[0] >= min[0] && point.position[1] >= min[1] && point.position[0] <= max[0] && point.position[1] <= max[1] {
+					let point_position = (stroke.origin + point.position - screen_center).rotate(tilt);
+					if point_position[0] >= min[0] && point_position[1] >= min[1] && point_position[0] <= max[0] && point_position[1] <= max[1] {
 						stroke.is_selected = !stroke.is_selected;
 						continue 'strokes;
 					}
 				}
 			} else {
 				for point in stroke.points.iter() {
-					if point.position[0] >= min[0] && point.position[1] >= min[1] && point.position[0] <= max[0] && point.position[1] <= max[1] {
+					let point_position = (stroke.origin + point.position - screen_center).rotate(tilt);
+					if point_position[0] >= min[0] && point_position[1] >= min[1] && point_position[0] <= max[0] && point_position[1] <= max[1] {
 						stroke.is_selected = true;
 						continue 'strokes;
 					}

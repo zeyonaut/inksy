@@ -18,6 +18,7 @@ mod linux;
 mod pixel;
 mod render;
 mod stroke;
+mod tools;
 mod wintab;
 
 use app::App;

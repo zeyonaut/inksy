@@ -59,7 +59,7 @@ struct ViewportUniform {
 	pub position: [f32; 2],
 	pub size: [f32; 2],
 	pub scale: f32,
-	pub _padding: [f32; 1],
+	pub tilt: f32,
 }
 
 #[repr(C)]
@@ -140,6 +140,7 @@ pub struct Renderer {
 	pub height: u32,
 	pub position: Vex<2, Vx>,
 	pub zoom: f32,
+	pub tilt: f32,
 	pub scale_factor: f32,
 	pub is_pending_resize: bool,
 	pub clear_color: wgpu::Color,
@@ -162,7 +163,7 @@ pub struct Renderer {
 
 impl Renderer {
 	// Create an instance of the renderer.
-	pub fn new<W>(window: &W, position: Vex<2, Vx>, width: u32, height: u32, zoom: f32, scale_factor: f32) -> Self
+	pub fn new<W>(window: &W, position: Vex<2, Vx>, width: u32, height: u32, zoom: f32, tilt: f32, scale_factor: f32) -> Self
 	where
 		W: HasRawWindowHandle + HasRawDisplayHandle,
 	{
@@ -446,7 +447,7 @@ impl Renderer {
 				position: [0., 0.],
 				size: [width as f32, height as f32],
 				scale: zoom * scale_factor,
-				_padding: [0.0; 1],
+				tilt,
 			}]),
 			usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
 		});
@@ -486,6 +487,7 @@ impl Renderer {
 			height,
 			position,
 			zoom,
+			tilt,
 			scale_factor,
 			is_pending_resize: false,
 			clear_color: wgpu::Color::BLACK,
@@ -547,6 +549,13 @@ impl Renderer {
 		}
 	}
 
+	pub fn retilt(&mut self, tilt: f32) {
+		if self.tilt != tilt {
+			self.tilt = tilt;
+			self.is_pending_resize = true;
+		}
+	}
+
 	pub fn update(&mut self) {}
 
 	pub fn render(&mut self, draw_commands: Vec<DrawCommand>) -> Result<(), wgpu::SurfaceError> {
@@ -559,7 +568,7 @@ impl Renderer {
 					position: self.position.0.map(Into::into),
 					size: [self.width as f32, self.height as f32],
 					scale: self.zoom * self.scale_factor,
-					_padding: [0.0; 1],
+					tilt: self.tilt,
 				}]),
 			);
 			self.is_pending_resize = false;
