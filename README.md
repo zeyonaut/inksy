@@ -1,3 +1,8 @@
-<h1 align=center>Inkslate</h1>
+<div align="center">
+  
+# Inkslate
 
-<p align=center>An infinite scratchpad for effortless chirography.</p>
+An infinite scratchpad for effortless chirography.
+
+<br>
+</div>
