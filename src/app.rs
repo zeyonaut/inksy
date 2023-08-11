@@ -422,6 +422,7 @@ impl App {
 							color: stroke.color,
 							points: stroke.points.clone(),
 							is_selected: false,
+							max_pressure: stroke.max_pressure,
 						})
 						.collect::<Vec<_>>(),
 				))
@@ -437,6 +438,7 @@ impl App {
 						color: stroke.color,
 						points: stroke.points.clone(),
 						is_selected: true,
+						max_pressure: stroke.max_pressure,
 					}));
 				}
 			}

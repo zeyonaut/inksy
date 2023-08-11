@@ -24,6 +24,7 @@ pub struct Stroke {
 	pub color: [u8; 4],
 	pub points: Vec<Point>,
 	pub is_selected: bool,
+	pub max_pressure: f32,
 }
 
 const STROKE_RADIUS: Vx = Vx(4.);
@@ -35,12 +36,21 @@ impl Stroke {
 			color,
 			points: Vec::new(),
 			is_selected: false,
+			max_pressure: 0.,
 		}
 	}
 
 	pub fn add_point(&mut self, position: Vex<2, Vx>, pressure: f32) {
-		if self.points.last().map_or(true, |point| (position - (self.origin + point.position)).norm() > Vx(2.)) {
+		let threshold = if self.points.len() < 2 {
+			(self.max_pressure.max(pressure) * STROKE_RADIUS).max(Vx(1.))
+		} else {
+			self.max_pressure.max(pressure) * STROKE_RADIUS.min(Vx(1.))
+		};
+		if self.points.last().map_or(true, |point| (position - (self.origin + point.position)).norm() > threshold) {
 			self.points.push(Point { position: position - self.origin, pressure });
+			self.max_pressure = pressure;
+		} else {
+			self.max_pressure = self.max_pressure.max(pressure);
 		}
 	}
 }
@@ -80,36 +90,99 @@ impl Canvas {
 	pub fn bake(&self, current_stroke: Option<&Stroke>, selection_offset: Option<Vex<2, Vx>>) -> (Vec<Vertex>, Vec<u16>) {
 		let mut vertices = vec![];
 		let mut indices = vec![];
+		const BORDER_RADIUS: Vx = Vx(6.);
+		const BORDER_COLOR: [u8; 4] = [0x28, 0xc2, 0xff, 0xff];
 
-		for stroke in self.strokes.iter().chain(current_stroke) {
+		for (stroke, is_current) in self.strokes.iter().zip(std::iter::repeat(false)).chain(current_stroke.map(|stroke| (stroke, true))) {
 			let stroke_offset = if stroke.is_selected { selection_offset.unwrap_or(Vex::ZERO) } else { Vex::ZERO };
 
-			let perpendiculars = stroke
-				.points
-				.array_windows::<2>()
-				.map(|[a, b]| {
-					let forward = b.position - a.position;
-					Vex([forward[1], -forward[0]]).normalized() * STROKE_RADIUS
-				})
-				.collect::<Vec<_>>();
+			if stroke.points.len() == 1 && !is_current {
+				let point = stroke.points.first().unwrap();
+				fn heptagonal_vertices() -> [Vex<2, f32>; 8] {
+					use std::f32::consts::PI;
+					let i = Vex([1., 0.]);
+					[
+						Vex::ZERO,
+						i,
+						i.rotate(2. * PI * 1. / 7.),
+						i.rotate(2. * PI * 2. / 7.),
+						i.rotate(2. * PI * 3. / 7.),
+						i.rotate(2. * PI * 4. / 7.),
+						i.rotate(2. * PI * 5. / 7.),
+						i.rotate(2. * PI * 6. / 7.),
+					]
+				}
 
-			if stroke.is_selected {
+				if stroke.is_selected {
+					let stroke_index = u16::try_from(vertices.len()).unwrap();
+					let heptagonal_vertices = heptagonal_vertices().map(|v| stroke.origin + stroke_offset + point.position + v * (stroke.max_pressure * STROKE_RADIUS + BORDER_RADIUS));
+					vertices.extend(heptagonal_vertices.map(|position| Vertex {
+						position: [position[0], position[1], Vx(0.)],
+						color: BORDER_COLOR.map(srgb8_to_f32),
+					}));
+					indices.extend([0, 1, 2, 0, 2, 3, 0, 3, 4, 0, 4, 5, 0, 5, 6, 0, 6, 7, 0, 7, 1].map(|n| stroke_index + n));
+				}
 				let stroke_index = u16::try_from(vertices.len()).unwrap();
-
-				const BORDER_RADIUS: Vx = Vx(6.);
-				let mut positions = vec![];
-				let border_perpendiculars = stroke
+				let heptagonal_vertices = heptagonal_vertices().map(|v| stroke.origin + stroke_offset + point.position + v * stroke.max_pressure * STROKE_RADIUS);
+				vertices.extend(heptagonal_vertices.map(|position| Vertex {
+					position: [position[0], position[1], Vx(0.)],
+					color: stroke.color.map(srgb8_to_f32),
+				}));
+				indices.extend([0, 1, 2, 0, 2, 3, 0, 3, 4, 0, 4, 5, 0, 5, 6, 0, 6, 7, 0, 7, 1].map(|n| stroke_index + n));
+			} else {
+				let perpendiculars = stroke
 					.points
 					.array_windows::<2>()
 					.map(|[a, b]| {
 						let forward = b.position - a.position;
-						Vex([forward[1], -forward[0]]).normalized() * BORDER_RADIUS
+						Vex([forward[1], -forward[0]]).normalized() * STROKE_RADIUS
 					})
 					.collect::<Vec<_>>();
 
-				for ([a, b], (p, o)) in stroke.points.array_windows::<2>().zip(perpendiculars.iter().zip(border_perpendiculars)) {
+				if stroke.is_selected {
+					let stroke_index = u16::try_from(vertices.len()).unwrap();
+
+					let mut positions = vec![];
+					let border_perpendiculars = stroke
+						.points
+						.array_windows::<2>()
+						.map(|[a, b]| {
+							let forward = b.position - a.position;
+							Vex([forward[1], -forward[0]]).normalized() * BORDER_RADIUS
+						})
+						.collect::<Vec<_>>();
+
+					for ([a, b], (p, o)) in stroke.points.array_windows::<2>().zip(perpendiculars.iter().zip(border_perpendiculars)) {
+						let current_index = stroke_index + u16::try_from(positions.len()).unwrap();
+						positions.extend([a.position + p * a.pressure + o, a.position - p * a.pressure - o, b.position + p * b.pressure + o, b.position - p * b.pressure - o].map(|x| x + stroke.origin + stroke_offset));
+						indices.extend([0, 2, 3, 0, 3, 1].map(|n| current_index + n));
+					}
+
+					for (i, [p, q]) in perpendiculars.array_windows::<2>().enumerate() {
+						let i = u16::try_from(i).unwrap();
+						let cross_product = p.cross(*q);
+
+						if cross_product > Vx2(0.) {
+							/* Clockwise */
+							indices.extend([2, 4 + 0, 4 + 1].map(|n| stroke_index + n + i * 4));
+						} else if cross_product < Vx2(0.) {
+							/* Counterclockwise */
+							indices.extend([3, 4 + 1, 4 + 0].map(|n| stroke_index + n + i * 4));
+						}
+					}
+
+					vertices.extend(positions.into_iter().map(|position| Vertex {
+						position: [position[0], position[1], Vx(0.)],
+						color: BORDER_COLOR.map(srgb8_to_f32),
+					}));
+				}
+
+				let stroke_index = u16::try_from(vertices.len()).unwrap();
+
+				let mut positions = vec![];
+				for ([a, b], p) in stroke.points.array_windows::<2>().zip(&perpendiculars) {
 					let current_index = stroke_index + u16::try_from(positions.len()).unwrap();
-					positions.extend([a.position + p * a.pressure + o, a.position - p * a.pressure - o, b.position + p * b.pressure + o, b.position - p * b.pressure - o].map(|x| x + stroke.origin + stroke_offset));
+					positions.extend([a.position + p * a.pressure, a.position - p * a.pressure, b.position + p * b.pressure, b.position - p * b.pressure].map(|x| x + stroke.origin + stroke_offset));
 					indices.extend([0, 2, 3, 0, 3, 1].map(|n| current_index + n));
 				}
 
@@ -128,36 +201,9 @@ impl Canvas {
 
 				vertices.extend(positions.into_iter().map(|position| Vertex {
 					position: [position[0], position[1], Vx(0.)],
-					color: [0x28, 0xc2, 0xff, 0xff].map(srgb8_to_f32),
+					color: stroke.color.map(srgb8_to_f32),
 				}));
 			}
-
-			let stroke_index = u16::try_from(vertices.len()).unwrap();
-
-			let mut positions = vec![];
-			for ([a, b], p) in stroke.points.array_windows::<2>().zip(&perpendiculars) {
-				let current_index = stroke_index + u16::try_from(positions.len()).unwrap();
-				positions.extend([a.position + p * a.pressure, a.position - p * a.pressure, b.position + p * b.pressure, b.position - p * b.pressure].map(|x| x + stroke.origin + stroke_offset));
-				indices.extend([0, 2, 3, 0, 3, 1].map(|n| current_index + n));
-			}
-
-			for (i, [p, q]) in perpendiculars.array_windows::<2>().enumerate() {
-				let i = u16::try_from(i).unwrap();
-				let cross_product = p.cross(*q);
-
-				if cross_product > Vx2(0.) {
-					/* Clockwise */
-					indices.extend([2, 4 + 0, 4 + 1].map(|n| stroke_index + n + i * 4));
-				} else if cross_product < Vx2(0.) {
-					/* Counterclockwise */
-					indices.extend([3, 4 + 1, 4 + 0].map(|n| stroke_index + n + i * 4));
-				}
-			}
-
-			vertices.extend(positions.into_iter().map(|position| Vertex {
-				position: [position[0], position[1], Vx(0.)],
-				color: stroke.color.map(srgb8_to_f32),
-			}));
 		}
 
 		(vertices, indices)
