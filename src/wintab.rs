@@ -13,6 +13,7 @@ use std::{
 };
 
 use bitflags::bitflags;
+use libloading::Symbol;
 use winit::platform::windows::WindowExtWindows;
 
 /*
@@ -121,7 +122,36 @@ impl Packet {
 	const DATA: PacketFields = PacketFields::NORMAL_PRESSURE;
 }
 
+macro_rules! impl_interface {
+	{$Name:ident: $($function:ident: fn($($parameter:ident: $factor:ty),*) -> $codomain:ty),* $(,)?} => {
+		#[allow(non_snake_case, dead_code)]
+		struct $Name {
+			$($function: unsafe extern "C" fn($($parameter: $factor),*) -> $codomain),*
+		}
+
+		impl $Name {
+			fn new(library: &libloading::Library) -> Option<Self> {
+				Some(Self {
+					$($function: *(unsafe { library.get(concat!(stringify!($function), "\0").as_bytes()) }.ok())?),*
+				})
+			}
+		}
+	}
+}
+
+impl_interface! {
+	WintabInterface:
+	WTOpenA: fn(hWnd: isize, lpLogCtx: *const LogicalContext, fEnable: c_uint) -> *const c_void,
+	WTEnable: fn(hCtx: *const c_void, fEnable: c_uint) -> c_uint,
+	WTQueueSizeGet: fn(hCtx: *const c_void) -> c_int,
+	WTPacketsGet: fn(hCtx: *const c_void, cMaxPkts: c_int, lpPkts: *mut c_void) -> c_int,
+	WTGetA: fn(hCtx: *const c_void, lpLogCtx: *mut LogicalContext) -> c_int,
+	WTClose: fn(hCtx: *const c_void) -> c_int,
+}
+
 pub struct TabletContext {
+	_wintab_library: libloading::Library,
+	wintab: WintabInterface,
 	pub handle: *const c_void,
 }
 
@@ -132,25 +162,20 @@ impl TabletContext {
 		logical_context.options &= !ContextOptions::MESSAGES;
 		logical_context.btn_up_mask = logical_context.btn_dn_mask;
 
-		unsafe {
-			let lib = libloading::Library::new("wintab32.dll").unwrap();
-			#[allow(non_snake_case)]
-			let WTOpenA: libloading::Symbol<unsafe extern "C" fn(hWnd: isize, lpLogCtx: *const LogicalContext, fEnable: c_uint) -> *const c_void> = lib.get(b"WTOpenA").unwrap();
-			let handle = WTOpenA(window.hwnd(), &logical_context, false as c_uint);
-			if handle.is_null() {
-				None
-			} else {
-				Some(Self { handle })
-			}
+		let wintab_library = unsafe { libloading::Library::new("wintab32.dll").ok()? };
+		let wintab = WintabInterface::new(&wintab_library)?;
+
+		let handle = unsafe { (wintab.WTOpenA)(window.hwnd(), &logical_context, false as c_uint) };
+		if handle.is_null() {
+			None
+		} else {
+			Some(Self { _wintab_library: wintab_library, wintab, handle })
 		}
 	}
 
 	pub fn enable(&mut self, enable: bool) -> Result<(), ()> {
 		unsafe {
-			let lib = libloading::Library::new("wintab32.dll").unwrap();
-			#[allow(non_snake_case)]
-			let WTEnable: libloading::Symbol<unsafe extern "C" fn(hCtx: *const c_void, fEnable: c_uint) -> c_uint> = lib.get(b"WTEnable").unwrap();
-			let is_request_satisfied = WTEnable(self.handle, enable as c_uint);
+			let is_request_satisfied = (self.wintab.WTEnable)(self.handle, enable as c_uint);
 			if is_request_satisfied != 0 {
 				Ok(())
 			} else {
@@ -160,21 +185,13 @@ impl TabletContext {
 	}
 
 	pub fn get_queue_size(&self) -> isize {
-		unsafe {
-			let lib = libloading::Library::new("wintab32.dll").unwrap();
-			#[allow(non_snake_case)]
-			let WTQueueSizeGet: libloading::Symbol<unsafe extern "C" fn(hCtx: *const c_void) -> c_int> = lib.get(b"WTQueueSizeGet").unwrap();
-			WTQueueSizeGet(self.handle) as isize
-		}
+		unsafe { (self.wintab.WTQueueSizeGet)(self.handle) as isize }
 	}
 
 	pub fn get_packets(&mut self, num: usize) -> Box<[Packet]> {
 		unsafe {
-			let lib = libloading::Library::new("wintab32.dll").unwrap();
-			#[allow(non_snake_case)]
-			let WTPacketsGet: libloading::Symbol<unsafe extern "C" fn(hCtx: *const c_void, cMaxPkts: c_int, lpPkts: *mut c_void) -> c_int> = lib.get(b"WTPacketsGet").unwrap();
 			let mut buf = Vec::with_capacity(num);
-			let len = WTPacketsGet(self.handle, num as c_int, buf.as_mut_ptr() as *mut c_void) as usize;
+			let len = (self.wintab.WTPacketsGet)(self.handle, num as c_int, buf.as_mut_ptr() as *mut c_void) as usize;
 			buf.set_len(len);
 			buf.into_boxed_slice()
 		}
@@ -183,10 +200,7 @@ impl TabletContext {
 	pub fn get(&self) -> Option<LogicalContext> {
 		unsafe {
 			let mut logical_context: LogicalContext = std::mem::zeroed();
-			let lib = libloading::Library::new("wintab32.dll").unwrap();
-			#[allow(non_snake_case)]
-			let WTGetA: libloading::Symbol<unsafe extern "C" fn(hCtx: *const c_void, lpLogCtx: *mut LogicalContext) -> c_int> = lib.get(b"WTGetA").unwrap();
-			let success = WTGetA(self.handle, &mut logical_context);
+			let success = (self.wintab.WTGetA)(self.handle, &mut logical_context);
 			if success != 0 {
 				Some(logical_context)
 			} else {
@@ -199,10 +213,7 @@ impl TabletContext {
 impl Drop for TabletContext {
 	fn drop(&mut self) {
 		unsafe {
-			let lib = libloading::Library::new("wintab32.dll").unwrap();
-			#[allow(non_snake_case)]
-			let WTClose: libloading::Symbol<unsafe extern "C" fn(hCtx: *const c_void) -> c_int> = lib.get(b"WTClose").unwrap();
-			WTClose(self.handle);
+			(self.wintab.WTClose)(self.handle);
 		}
 	}
 }
