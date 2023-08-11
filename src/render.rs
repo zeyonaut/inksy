@@ -248,7 +248,7 @@ impl Renderer {
 		let trimesh_render_pipeline = {
 			let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
 				label: Some("shader"),
-				source: wgpu::ShaderSource::Wgsl(include_str!("shaders/shader.wgsl").into()),
+				source: wgpu::ShaderSource::Wgsl(include_str!("shaders/trigon.wgsl").into()),
 			});
 
 			let render_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
@@ -297,7 +297,7 @@ impl Renderer {
 		let card_render_pipeline = {
 			let rect_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
 				label: Some("rect_shader"),
-				source: wgpu::ShaderSource::Wgsl(include_str!("shaders/roundrect.wgsl").into()),
+				source: wgpu::ShaderSource::Wgsl(include_str!("shaders/round_rectangle.wgsl").into()),
 			});
 
 			let rect_render_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
@@ -346,7 +346,7 @@ impl Renderer {
 		let color_ring_render_pipeline = {
 			let colorwheel_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
 				label: Some("colorwheel_shader"),
-				source: wgpu::ShaderSource::Wgsl(include_str!("shaders/colorwheel.wgsl").into()),
+				source: wgpu::ShaderSource::Wgsl(include_str!("shaders/color_picker_ring.wgsl").into()),
 			});
 
 			let colorwheel_render_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
@@ -395,7 +395,7 @@ impl Renderer {
 		let color_trigon_render_pipeline = {
 			let saturation_value_plot_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
 				label: Some("saturation_value_plot_shader"),
-				source: wgpu::ShaderSource::Wgsl(include_str!("shaders/saturation_value_plot.wgsl").into()),
+				source: wgpu::ShaderSource::Wgsl(include_str!("shaders/color_picker_trigon.wgsl").into()),
 			});
 
 			let saturation_value_plot_render_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
