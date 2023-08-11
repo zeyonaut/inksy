@@ -9,6 +9,7 @@ use std::time::{Duration, Instant};
 
 use enumset::EnumSet;
 use fast_srgb8::srgb8_to_f32;
+use image::io::Reader as ImageReader;
 use winit::{
 	dpi::{PhysicalPosition, PhysicalSize},
 	event::*,
@@ -80,6 +81,10 @@ impl App {
 	// Sets up the logger and renderer.
 	pub fn new(event_loop: &EventLoop<()>) -> Self {
 		let window = WindowBuilder::new().with_title("Inkslate").with_visible(false).build(event_loop).unwrap();
+
+		let img = ImageReader::open("res/logo_64.png").unwrap().decode().unwrap();
+		let icon = winit::window::Icon::from_rgba(img.into_bytes(), 64, 64).unwrap();
+		window.set_window_icon(Some(icon));
 
 		// Resize the window to a reasonable size.
 		let monitor_size = window.current_monitor().unwrap().size();
