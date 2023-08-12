@@ -6,6 +6,7 @@ name = "inkslate"
 version = "0.1.0"
 edition = "2021"
 license = "MPL-2.0"
+build = "build.rs"
 
 [dependencies]
 winit = "0.28.6"
@@ -20,6 +21,9 @@ fast-srgb8 = "1.0"
 enumset = "1.1.2"
 derive_more = "0.99.17"
 image = "0.24.7"
+
+[target.'cfg(windows)'.build-dependencies]
+embed-resource = "2.2.0"
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = "0.48"

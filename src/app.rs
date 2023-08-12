@@ -5,7 +5,10 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-use std::time::{Duration, Instant};
+use std::{
+	io::Cursor,
+	time::{Duration, Instant},
+};
 
 use enumset::EnumSet;
 use fast_srgb8::srgb8_to_f32;
@@ -50,6 +53,8 @@ const RING_WIDTH: Lx = Lx(28.);
 const OUTLINE_WIDTH: Lx = Lx(2.);
 const SATURATION_VALUE_WINDOW_DIAMETER: Lx = Lx(8.);
 
+const LOGO_64: &[u8] = include_bytes!("../res/logo_64.png").as_slice();
+
 pub enum ClipboardContents {
 	Subcanvas(Vec<Stroke>),
 }
@@ -82,8 +87,11 @@ impl App {
 	pub fn new(event_loop: &EventLoop<()>) -> Self {
 		let window = WindowBuilder::new().with_title("Inkslate").with_visible(false).build(event_loop).unwrap();
 
-		let img = ImageReader::open("res/logo_64.png").unwrap().decode().unwrap();
-		let icon = winit::window::Icon::from_rgba(img.into_bytes(), 64, 64).unwrap();
+		// Set the icon (on Windows).
+		let mut image_reader = ImageReader::new(Cursor::new(LOGO_64));
+		image_reader.set_format(image::ImageFormat::Png);
+		let image = image_reader.decode().unwrap();
+		let icon = winit::window::Icon::from_rgba(image.into_bytes(), 64, 64).unwrap();
 		window.set_window_icon(Some(icon));
 
 		// Resize the window to a reasonable size.

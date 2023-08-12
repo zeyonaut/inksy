@@ -13,7 +13,6 @@ use std::{
 };
 
 use bitflags::bitflags;
-use libloading::Symbol;
 use winit::platform::windows::WindowExtWindows;
 
 /*
