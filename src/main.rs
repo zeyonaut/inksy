@@ -12,14 +12,13 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod app;
-mod buffer;
+#[path ="input/_.rs"]
 mod input;
-mod linux;
 mod pixel;
+#[path ="render/_.rs"]
 mod render;
 mod stroke;
 mod tools;
-mod wintab;
 
 use app::App;
 use winit::event_loop::EventLoopBuilder;

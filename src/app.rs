@@ -21,9 +21,9 @@ use winit::{
 };
 
 #[cfg(target_os = "linux")]
-use crate::linux::*;
+use crate::input::linux::*;
 #[cfg(target_os = "windows")]
-use crate::wintab::*;
+use crate::input::wintab::*;
 use crate::{
 	input::{Button, InputMonitor, Key},
 	pixel::{Lx, Px, Scale, Vex, Vx, Zero, Zoom},
