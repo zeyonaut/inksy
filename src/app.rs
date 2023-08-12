@@ -174,6 +174,7 @@ impl App {
 						// Negative multiplier = reverse scrolling; positive multiplier = natural scrolling.
 						self.position = self.position + Vex([*lines, *rows].map(Lx)).z(self.zoom) * -32.;
 						self.renderer.reposition(self.position);
+						self.should_redraw = true;
 					},
 					WindowEvent::CursorMoved { position, .. } => {
 						self.cursor_physical_position = Vex([position.x as _, position.y as _].map(Px));
@@ -189,20 +190,24 @@ impl App {
 
 					// Resize the window if requested to.
 					WindowEvent::Resized(physical_size) => {
-						self.pending_resize = Some(*physical_size);
+						let mut size = physical_size.clone();
+						// TODO: This is suboptimal, as it visibly affects the client area. Is there a better way?
+						#[cfg(target_os = "windows")]
+						if self.window.fullscreen().is_some() {
+							size.height += 1;
+						}
+						self.pending_resize = Some(size);
+						self.should_redraw = true;
 					},
 					WindowEvent::ScaleFactorChanged { scale_factor, new_inner_size } => {
 						self.scale = Scale(*scale_factor as f32);
 						self.pending_resize = Some(**new_inner_size);
+						self.should_redraw = true;
 					},
-
 					// Ignore all other window events.
 					_ => {},
 				}
-			},
 
-			// If all other main events have been cleared, poll for tablet events, then reqeust a window redraw.
-			Event::MainEventsCleared => {
 				self.poll_tablet();
 				self.process_input();
 				self.window.request_redraw();
@@ -211,18 +216,14 @@ impl App {
 			// If a window redraw is requested, have the renderer update and render.
 			Event::RedrawRequested(window_id) if window_id == self.window.id() => {
 				self.update_renderer();
-
-				// Only render if it's been too long since the last render.
 				if self.should_redraw || (Instant::now() - self.last_frame_instant) >= Duration::new(1, 0) / 90 {
 					self.last_frame_instant = Instant::now();
-
 					match self.repaint() {
 						Ok(_) => {},
 						Err(wgpu::SurfaceError::Lost) => self.renderer.resize(self.renderer.width, self.renderer.height, self.renderer.scale_factor),
 						Err(wgpu::SurfaceError::OutOfMemory) => *control_flow = ControlFlow::Exit,
 						Err(e) => eprintln!("{:?}", e),
 					}
-
 					self.should_redraw = false;
 				}
 			},
@@ -233,7 +234,7 @@ impl App {
 			},
 
 			// Ignore all other events.
-			_ => {},
+			_ => return,
 		}
 	}
 
