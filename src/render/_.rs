@@ -5,6 +5,8 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
+mod buffer;
+
 use std::ops::Range;
 
 use fast_srgb8::srgb8_to_f32;
@@ -12,10 +14,8 @@ use pollster::FutureExt;
 use raw_window_handle::{HasRawDisplayHandle, HasRawWindowHandle};
 use wgpu::{util::DeviceExt, SurfaceTexture, VertexBufferLayout};
 
-use crate::{
-	buffer::DynamicBuffer,
-	pixel::{Px, Vex, Vx},
-};
+use self::buffer::DynamicBuffer;
+use crate::pixel::{Px, Vex, Vx};
 
 const SHOULD_MULTISAMPLE: bool = false;
 

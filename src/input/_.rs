@@ -5,6 +5,11 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
+#[cfg(target_os = "linux")]
+pub mod linux;
+#[cfg(target_os = "windows")]
+pub mod wintab;
+
 use enumset::{EnumSet, EnumSetType};
 use winit::event::{ElementState, KeyboardInput};
 

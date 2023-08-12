@@ -12,10 +12,10 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod app;
-#[path ="input/_.rs"]
+#[path = "input/_.rs"]
 mod input;
 mod pixel;
-#[path ="render/_.rs"]
+#[path = "render/_.rs"]
 mod render;
 mod stroke;
 mod tools;
