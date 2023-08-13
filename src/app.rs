@@ -10,7 +10,6 @@ use std::{
 	time::{Duration, Instant},
 };
 
-use enumset::EnumSet;
 use fast_srgb8::srgb8_to_f32;
 use image::io::Reader as ImageReader;
 use winit::{
@@ -25,25 +24,17 @@ use crate::input::linux::*;
 #[cfg(target_os = "windows")]
 use crate::input::wintab::*;
 use crate::{
-	input::{Button, InputMonitor, Key},
+	actions::default_keymap,
+	input::{
+		keymap::{execute_keymap, Keymap},
+		Button, InputMonitor, Key,
+	},
 	pixel::{Lx, Px, Scale, Vex, Vx, Zero, Zoom},
 	render::{DrawCommand, Renderer},
 	stroke::{Canvas, Stroke},
 	tools::*,
+	utility::hsv_to_srgba8,
 };
-
-fn hsv_to_srgb(h: f32, s: f32, v: f32) -> [f32; 3] {
-	fn hue(h: f32) -> [f32; 3] {
-		[(h * 6. - 3.).abs() - 1., 2. - (h * 6. - 2.).abs(), 2. - (h * 6. - 4.).abs()].map(|n| n.clamp(0., 1.))
-	}
-	hue(h).map(|n: f32| ((n - 1.) * s + 1.) * v)
-}
-
-fn hsv_to_srgba8(hsv: [f32; 3]) -> [u8; 4] {
-	let [h, s, v] = hsv;
-	let [r, g, b] = hsv_to_srgb(h, s, v).map(|n| if n >= 1.0 { 255 } else { (n * 256.) as u8 });
-	[r, g, b, 0xff]
-}
 
 // TODO: Move this somewhere saner.
 // Color selector constants in logical pixels/points.
@@ -61,30 +52,34 @@ pub enum ClipboardContents {
 
 // Current state of our app.
 pub struct App {
-	window: winit::window::Window,
-	pending_resize: Option<winit::dpi::PhysicalSize<u32>>,
-	should_redraw: bool,
-	renderer: Renderer,
-	cursor_physical_position: Vex<2, Px>,
-	position: Vex<2, Vx>,
-	zoom: Zoom,
-	scale: Scale,
-	tilt: f32,
-	is_cursor_relevant: bool,
-	tablet_context: Option<TabletContext>,
-	pressure: Option<f64>,
-	canvas: Canvas,
-	mode_stack: ModeStack,
-	last_frame_instant: std::time::Instant,
-	input_monitor: InputMonitor,
-	current_color: [f32; 3],
-	clipboard_contents: Option<ClipboardContents>,
-	is_fullscreen: bool,
+	pub window: winit::window::Window,
+	pub pending_resize: Option<winit::dpi::PhysicalSize<u32>>,
+	pub should_redraw: bool,
+	pub renderer: Renderer,
+	pub cursor_physical_position: Vex<2, Px>,
+	pub position: Vex<2, Vx>,
+	pub zoom: Zoom,
+	pub scale: Scale,
+	pub tilt: f32,
+	pub is_cursor_relevant: bool,
+	pub tablet_context: Option<TabletContext>,
+	pub pressure: Option<f64>,
+	pub canvas: Canvas,
+	pub mode_stack: ModeStack,
+	pub last_frame_instant: std::time::Instant,
+	pub input_monitor: InputMonitor,
+	pub keymap: Keymap,
+	pub current_color: [f32; 3],
+	pub clipboard_contents: Option<ClipboardContents>,
+	pub is_fullscreen: bool,
 }
 
 impl App {
 	// Sets up the logger and renderer.
 	pub fn new(event_loop: &EventLoop<()>) -> Self {
+		let keymap = default_keymap();
+
+		// Create a window.
 		let window = WindowBuilder::new().with_title("Inkslate").with_visible(false).build(event_loop).unwrap();
 
 		// Set the icon (on Windows).
@@ -140,6 +135,7 @@ impl App {
 			mode_stack: ModeStack::new(Tool::Draw { current_stroke: None }),
 			last_frame_instant: Instant::now() - Duration::new(1, 0),
 			input_monitor: InputMonitor::new(),
+			keymap,
 			current_color: [2. / 3., 0.016, 1.],
 			clipboard_contents: None,
 			is_fullscreen: false,
@@ -388,136 +384,14 @@ impl App {
 
 		if self.input_monitor.is_fresh {
 			self.should_redraw = true;
-
-			use crate::input::Key::*;
-			if self.input_monitor.should_trigger(EnumSet::EMPTY, B) {
-				self.mode_stack.switch_draw();
-			}
-			if self.input_monitor.should_trigger(EnumSet::EMPTY, Backspace) {
-				for _ in self.canvas.strokes.extract_if(|x| x.is_selected) {}
-			}
-			if self.input_monitor.should_trigger(LControl | LShift, F) {
-				if self.is_fullscreen {
-					self.window.set_fullscreen(None);
-				} else {
-					self.window.set_fullscreen(Some(winit::window::Fullscreen::Borderless(self.window.current_monitor())));
-				}
-				self.is_fullscreen = !self.is_fullscreen;
-			}
-			if self.input_monitor.should_trigger(LControl, F) {
-				self.window.set_maximized(!self.window.is_maximized());
-			}
-			if self.input_monitor.should_trigger(LControl, X) {
-				let offset = cursor_virtual_position + self.position;
-				self.clipboard_contents = Some(ClipboardContents::Subcanvas(
-					self.canvas
-						.strokes
-						.extract_if(|x| {
-							if x.is_selected {
-								x.origin = x.origin - offset;
-								x.is_selected = false;
-								true
-							} else {
-								false
-							}
-						})
-						.collect(),
-				));
-			}
-			if self.input_monitor.should_trigger(LControl, C) {
-				let offset = cursor_virtual_position + self.position;
-				self.clipboard_contents = Some(ClipboardContents::Subcanvas(
-					self.canvas
-						.strokes
-						.iter()
-						.filter(|x| x.is_selected)
-						.map(|stroke| Stroke {
-							origin: stroke.origin - offset,
-							color: stroke.color,
-							points: stroke.points.clone(),
-							is_selected: false,
-							max_pressure: stroke.max_pressure,
-						})
-						.collect::<Vec<_>>(),
-				))
-			}
-			if self.input_monitor.should_trigger(LControl, V) {
-				if let Some(ClipboardContents::Subcanvas(strokes)) = self.clipboard_contents.as_ref() {
-					for stroke in self.canvas.strokes.iter_mut() {
-						stroke.is_selected = false;
-					}
-					let offset = cursor_virtual_position + self.position;
-					self.canvas.strokes.extend(strokes.iter().map(|stroke| Stroke {
-						origin: stroke.origin + offset,
-						color: stroke.color,
-						points: stroke.points.clone(),
-						is_selected: true,
-						max_pressure: stroke.max_pressure,
-					}));
-				}
-			}
-			if self.input_monitor.should_trigger(EnumSet::EMPTY, A) {
-				for stroke in self.canvas.strokes.iter_mut() {
-					stroke.is_selected = true;
-				}
-			}
-			if self.input_monitor.should_trigger(LShift, A) {
-				for stroke in self.canvas.strokes.iter_mut() {
-					stroke.is_selected = false;
-				}
-			}
-			if self.input_monitor.should_trigger(Tab, R) {
-				for stroke in self.canvas.strokes.iter_mut().filter(|stroke| stroke.is_selected) {
-					stroke.color = hsv_to_srgba8(self.current_color);
-				}
-			}
-			if self.input_monitor.should_trigger(EnumSet::EMPTY, S) {
-				self.mode_stack.switch_select();
-			}
-			if self.input_monitor.should_trigger(EnumSet::EMPTY, T) {
-				self.mode_stack.switch_move();
-			}
-			if self.input_monitor.should_retrigger(EnumSet::EMPTY, Z) {
-				if self.mode_stack.is_drafting() {
-					self.mode_stack.discard_draft();
-				} else {
-					self.canvas.strokes.pop();
-				}
-			}
-			if self.input_monitor.should_trigger(EnumSet::EMPTY, Escape) {
-				self.mode_stack.discard_draft();
-			}
-			if self.input_monitor.was_discovered(EnumSet::EMPTY, Space) {
-				self.mode_stack.switch_transient(TransientModeSwitch::Pan { should_pan: true });
-			} else if self.input_monitor.was_undiscovered(EnumSet::EMPTY, Space) {
-				self.mode_stack.switch_transient(TransientModeSwitch::Pan { should_pan: false });
-			}
-			if self.input_monitor.was_discovered(EnumSet::EMPTY, LControl | Space) {
-				self.mode_stack.switch_transient(TransientModeSwitch::Zoom { should_zoom: true });
-			} else if self.input_monitor.was_undiscovered(EnumSet::EMPTY, LControl | Space) {
-				self.mode_stack.switch_transient(TransientModeSwitch::Zoom { should_zoom: false });
-			}
-			if self.input_monitor.was_discovered(EnumSet::EMPTY, LShift | Space) {
-				self.mode_stack.switch_transient(TransientModeSwitch::Orbit { should_orbit: true });
-			} else if self.input_monitor.was_undiscovered(EnumSet::EMPTY, LShift | Space) {
-				self.mode_stack.switch_transient(TransientModeSwitch::Orbit { should_orbit: false });
-			}
-			if self.input_monitor.was_discovered(EnumSet::EMPTY, Tab) {
-				self.mode_stack.switch_transient(TransientModeSwitch::Color {
-					center: Some(if self.is_cursor_relevant {
-						self.cursor_physical_position
-					} else {
-						Vex([self.renderer.width as f32 / 2., self.renderer.height as f32 / 2.].map(Px))
-					}),
-				});
-			} else if self.input_monitor.was_undiscovered(EnumSet::EMPTY, Tab) {
-				self.mode_stack.switch_transient(TransientModeSwitch::Color { center: None });
-			}
+			execute_keymap(self, self.input_monitor.active_keys, self.input_monitor.fresh_keys, self.input_monitor.different_keys);
 		}
 
 		match self.mode_stack.get_mut() {
 			Tool::Draw { current_stroke } => {
-				self.window.set_cursor_icon(winit::window::CursorIcon::Arrow);
+				if self.is_cursor_relevant {
+					self.window.set_cursor_icon(winit::window::CursorIcon::Default);
+				}
 				if self.input_monitor.active_buttons.contains(Left) {
 					if self.input_monitor.different_buttons.contains(Left) && current_stroke.is_none() {
 						let srgba8 = hsv_to_srgba8(self.current_color);
@@ -534,7 +408,9 @@ impl App {
 			},
 			Tool::Select { origin } => {
 				let offset = cursor_virtual_position + self.position;
-				self.window.set_cursor_icon(winit::window::CursorIcon::Crosshair);
+				if self.is_cursor_relevant {
+					self.window.set_cursor_icon(winit::window::CursorIcon::Crosshair);
+				}
 
 				if self.input_monitor.active_buttons.contains(Left) {
 					if self.input_monitor.different_buttons.contains(Left) && origin.is_none() {
@@ -552,7 +428,9 @@ impl App {
 			},
 			Tool::Pan { origin } => {
 				if self.input_monitor.active_buttons.contains(Left) {
-					self.window.set_cursor_icon(winit::window::CursorIcon::Grabbing);
+					if self.is_cursor_relevant {
+						self.window.set_cursor_icon(winit::window::CursorIcon::Grabbing);
+					}
 					if origin.is_none() {
 						*origin = Some(PanOrigin {
 							cursor: cursor_virtual_position,
@@ -560,7 +438,9 @@ impl App {
 						});
 					}
 				} else {
-					self.window.set_cursor_icon(winit::window::CursorIcon::Grab);
+					if self.is_cursor_relevant {
+						self.window.set_cursor_icon(winit::window::CursorIcon::Grab);
+					}
 					if origin.is_some() {
 						*origin = None;
 					}
@@ -573,7 +453,9 @@ impl App {
 			},
 			Tool::Zoom { origin } => {
 				if self.input_monitor.active_buttons.contains(Left) {
-					self.window.set_cursor_icon(winit::window::CursorIcon::Grabbing);
+					if self.is_cursor_relevant {
+						self.window.set_cursor_icon(winit::window::CursorIcon::Grabbing);
+					}
 					if origin.is_none() {
 						let window_height = Px(self.renderer.height as f32);
 						*origin = Some(ZoomOrigin {
@@ -582,7 +464,9 @@ impl App {
 						});
 					}
 				} else {
-					self.window.set_cursor_icon(winit::window::CursorIcon::Grab);
+					if self.is_cursor_relevant {
+						self.window.set_cursor_icon(winit::window::CursorIcon::Grab);
+					}
 					if origin.is_some() {
 						*origin = None;
 					}
@@ -598,7 +482,9 @@ impl App {
 			},
 			Tool::Orbit { initial } => {
 				if self.input_monitor.active_buttons.contains(Left) {
-					self.window.set_cursor_icon(winit::window::CursorIcon::Grabbing);
+					if self.is_cursor_relevant {
+						self.window.set_cursor_icon(winit::window::CursorIcon::Grabbing);
+					}
 					if initial.is_none() {
 						let semidimensions = Vex([self.renderer.width as f32 / 2., self.renderer.height as f32 / 2.].map(Px));
 						let vector = self.cursor_physical_position - semidimensions;
@@ -606,7 +492,9 @@ impl App {
 						*initial = Some(OrbitInitial { tilt: self.tilt, cursor_angle: angle });
 					}
 				} else {
-					self.window.set_cursor_icon(winit::window::CursorIcon::Grab);
+					if self.is_cursor_relevant {
+						self.window.set_cursor_icon(winit::window::CursorIcon::Grab);
+					}
 					if initial.is_some() {
 						*initial = None;
 					}
@@ -621,7 +509,9 @@ impl App {
 				}
 			},
 			Tool::Move { origin } => {
-				self.window.set_cursor_icon(winit::window::CursorIcon::Move);
+				if self.is_cursor_relevant {
+					self.window.set_cursor_icon(winit::window::CursorIcon::Move);
+				}
 
 				if self.input_monitor.active_buttons.contains(Left) {
 					if self.input_monitor.different_buttons.contains(Left) && origin.is_none() {
@@ -638,7 +528,9 @@ impl App {
 				}
 			},
 			Tool::PickColor { cursor_physical_origin, part } => {
-				self.window.set_cursor_icon(winit::window::CursorIcon::Crosshair);
+				if self.is_cursor_relevant {
+					self.window.set_cursor_icon(winit::window::CursorIcon::Crosshair);
+				}
 
 				if self.input_monitor.active_buttons.contains(Left) {
 					let cursor = self.cursor_physical_position;

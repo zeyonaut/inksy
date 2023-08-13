@@ -10,6 +10,8 @@ pub mod linux;
 #[cfg(target_os = "windows")]
 pub mod wintab;
 
+pub mod keymap;
+
 use enumset::{EnumSet, EnumSetType};
 use winit::event::{ElementState, KeyboardInput};
 
@@ -168,29 +170,5 @@ impl InputMonitor {
 		self.different_keys = EnumSet::EMPTY;
 		self.different_buttons = EnumSet::EMPTY;
 		self.is_fresh = false;
-	}
-
-	// Returns true iff the given keystroke was triggered since the last defresh.
-	pub fn should_trigger(&self, modifiers: impl Into<EnumSet<Key>>, triggers: impl Into<EnumSet<Key>>) -> bool {
-		let triggers = triggers.into();
-		(modifiers.into().union(triggers) == self.active_keys) && !self.different_keys.is_empty() && self.different_keys.is_subset(triggers)
-	}
-
-	// Returns true iff the given keystroke was (re)triggered since the last defresh.
-	pub fn should_retrigger(&self, modifiers: impl Into<EnumSet<Key>>, triggers: impl Into<EnumSet<Key>>) -> bool {
-		let triggers = triggers.into();
-		(modifiers.into().union(triggers) == self.active_keys) && !self.fresh_keys.is_empty() && self.fresh_keys.is_subset(triggers)
-	}
-
-	// Return true iff the given keystroke was "discovered" since the last defresh.
-	// A keystroke can be discovered multiple times before it is undiscovered.
-	pub fn was_discovered(&self, modifiers: impl Into<EnumSet<Key>>, triggers: impl Into<EnumSet<Key>>) -> bool {
-		let triggers = triggers.into();
-		(modifiers.into().union(triggers) == self.active_keys) && !self.different_keys.is_empty() && (self.different_keys.is_subset(triggers) || !self.active_keys.complement().intersection(self.different_keys).is_empty())
-	}
-
-	pub fn was_undiscovered(&self, modifiers: impl Into<EnumSet<Key>>, triggers: impl Into<EnumSet<Key>>) -> bool {
-		let wanted_keys = modifiers.into().union(triggers.into());
-		!wanted_keys.is_subset(self.active_keys) && wanted_keys.is_subset(self.active_keys.symmetrical_difference(self.different_keys))
 	}
 }

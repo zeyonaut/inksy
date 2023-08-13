@@ -11,6 +11,7 @@
 // We disable windows_subsystem = "windows" in debug mode to show wgpu validation errors.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod actions;
 mod app;
 #[path = "input/_.rs"]
 mod input;
@@ -19,6 +20,7 @@ mod pixel;
 mod render;
 mod stroke;
 mod tools;
+mod utility;
 
 use app::App;
 use winit::event_loop::EventLoopBuilder;
