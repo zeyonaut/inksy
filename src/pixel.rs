@@ -144,12 +144,12 @@ macro_rules! impl_new_f32_dimensionality {
 
 // A virtual pixel length.
 #[repr(transparent)]
-#[derive(Clone, Copy, derive_more::Add, derive_more::Sub, derive_more::Neg, derive_more::From, derive_more::Into, PartialEq, PartialOrd, Debug, derive_more::Display, bytemuck::Pod, bytemuck::Zeroable)]
+#[derive(Default, Clone, Copy, derive_more::Add, derive_more::Sub, derive_more::Neg, derive_more::From, derive_more::Into, PartialEq, PartialOrd, Debug, derive_more::Display, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct Vx(pub f32);
 
 // A virtual pixel area.
 #[repr(transparent)]
-#[derive(Clone, Copy, derive_more::Add, derive_more::Sub, derive_more::Neg, derive_more::From, derive_more::Into, PartialEq, PartialOrd, Debug, derive_more::Display, bytemuck::Pod, bytemuck::Zeroable)]
+#[derive(Default, Clone, Copy, derive_more::Add, derive_more::Sub, derive_more::Neg, derive_more::From, derive_more::Into, PartialEq, PartialOrd, Debug, derive_more::Display, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct Vx2(pub f32);
 
 impl_new_f32!(Vx);
@@ -158,17 +158,31 @@ impl_new_f32_dimensionality! {length: Vx, area: Vx2}
 
 // A logical pixel length.
 #[repr(transparent)]
-#[derive(Clone, Copy, derive_more::Add, derive_more::Sub, derive_more::Neg, derive_more::From, derive_more::Into, PartialEq, PartialOrd, Debug, derive_more::Display, bytemuck::Pod, bytemuck::Zeroable)]
+#[derive(Default, Clone, Copy, derive_more::Add, derive_more::Sub, derive_more::Neg, derive_more::From, derive_more::Into, PartialEq, PartialOrd, Debug, derive_more::Display, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct Lx(pub f32);
 
 // A logical pixel area.
 #[repr(transparent)]
-#[derive(Clone, Copy, derive_more::Add, derive_more::Sub, derive_more::Neg, derive_more::From, derive_more::Into, PartialEq, PartialOrd, Debug, derive_more::Display, bytemuck::Pod, bytemuck::Zeroable)]
+#[derive(Default, Clone, Copy, derive_more::Add, derive_more::Sub, derive_more::Neg, derive_more::From, derive_more::Into, PartialEq, PartialOrd, Debug, derive_more::Display, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct Lx2(pub f32);
 
 impl_new_f32!(Lx);
 impl_new_f32!(Lx2);
 impl_new_f32_dimensionality! {length: Lx, area: Lx2}
+
+// A physical pixel length.
+#[repr(transparent)]
+#[derive(Default, Clone, Copy, derive_more::Add, derive_more::Sub, derive_more::Neg, derive_more::From, derive_more::Into, PartialEq, PartialOrd, Debug, derive_more::Display, bytemuck::Pod, bytemuck::Zeroable)]
+pub struct Px(pub f32);
+
+// A physical pixel area.
+#[repr(transparent)]
+#[derive(Default, Clone, Copy, derive_more::Add, derive_more::Sub, derive_more::Neg, derive_more::From, derive_more::Into, PartialEq, PartialOrd, Debug, derive_more::Display, bytemuck::Pod, bytemuck::Zeroable)]
+pub struct Px2(pub f32);
+
+impl_new_f32!(Px);
+impl_new_f32!(Px2);
+impl_new_f32_dimensionality! {length: Px, area: Px2}
 
 // A zoom factor is a ratio between a logical pixel and a virtual pixel.
 #[repr(transparent)]
@@ -203,20 +217,6 @@ impl Px {
 		Lx(self.0 / scale.0)
 	}
 }
-
-// A physical pixel length.
-#[repr(transparent)]
-#[derive(Clone, Copy, derive_more::Add, derive_more::Sub, derive_more::Neg, derive_more::From, derive_more::Into, PartialEq, PartialOrd, Debug, derive_more::Display, bytemuck::Pod, bytemuck::Zeroable)]
-pub struct Px(pub f32);
-
-// A physical pixel area.
-#[repr(transparent)]
-#[derive(Clone, Copy, derive_more::Add, derive_more::Sub, derive_more::Neg, derive_more::From, derive_more::Into, PartialEq, PartialOrd, Debug, derive_more::Display, bytemuck::Pod, bytemuck::Zeroable)]
-pub struct Px2(pub f32);
-
-impl_new_f32!(Px);
-impl_new_f32!(Px2);
-impl_new_f32_dimensionality! {length: Px, area: Px2}
 
 fn map_r<'a, const N: usize, A, U, F: FnMut(&'a A) -> U>(a: &'a [A; N], mut f: F) -> [U; N] {
 	use core::mem::MaybeUninit;

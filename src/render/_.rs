@@ -6,15 +6,22 @@
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
 mod buffer;
+mod instance_renderer;
+mod uniform_buffer;
+mod vertex_renderer;
 
 use std::ops::Range;
 
 use fast_srgb8::srgb8_to_f32;
 use pollster::FutureExt;
 use raw_window_handle::{HasRawDisplayHandle, HasRawWindowHandle};
-use wgpu::{util::DeviceExt, SurfaceTexture, VertexBufferLayout};
+use wgpu::SurfaceTexture;
 
-use self::buffer::DynamicBuffer;
+use self::{
+	instance_renderer::{InstanceAttributes, InstanceRenderer},
+	uniform_buffer::UniformBuffer,
+	vertex_renderer::{VertexAttributes, VertexRenderer},
+};
 use crate::pixel::{Px, Vex, Vx};
 
 const SHOULD_MULTISAMPLE: bool = false;
@@ -34,28 +41,19 @@ pub enum RenderCommand {
 
 // This struct stores the data of each vertex to be rendered.
 #[repr(C)]
-#[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
+#[derive(Default, Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct Vertex {
 	pub position: [Vx; 3],
 	pub color: [f32; 4],
 }
 
-impl Vertex {
+impl VertexAttributes<2> for Vertex {
 	const ATTRIBUTES: [wgpu::VertexAttribute; 2] = wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x4];
-
-	// Returns the layout of buffers composed of instances of Self.
-	pub const fn buffer_layout<'a>() -> VertexBufferLayout<'a> {
-		wgpu::VertexBufferLayout {
-			array_stride: std::mem::size_of::<Self>() as wgpu::BufferAddress,
-			step_mode: wgpu::VertexStepMode::Vertex,
-			attributes: &Self::ATTRIBUTES,
-		}
-	}
 }
 
 #[repr(C)]
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
-struct ViewportUniform {
+pub struct ViewportUniform {
 	pub position: [f32; 2],
 	pub size: [f32; 2],
 	pub scale: f32,
@@ -63,7 +61,7 @@ struct ViewportUniform {
 }
 
 #[repr(C)]
-#[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
+#[derive(Default, Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct CardInstance {
 	pub position: [f32; 2],
 	pub dimensions: [f32; 2],
@@ -72,21 +70,12 @@ pub struct CardInstance {
 	pub radius: f32,
 }
 
-impl CardInstance {
+impl InstanceAttributes<5> for CardInstance {
 	const ATTRIBUTES: [wgpu::VertexAttribute; 5] = wgpu::vertex_attr_array![0 => Float32x2, 1 => Float32x2, 2 => Float32x4, 3 => Float32, 4 => Float32];
-
-	// Returns the layout of buffers composed of instances of Self.
-	pub const fn buffer_layout<'a>() -> VertexBufferLayout<'a> {
-		wgpu::VertexBufferLayout {
-			array_stride: std::mem::size_of::<Self>() as wgpu::BufferAddress,
-			step_mode: wgpu::VertexStepMode::Instance,
-			attributes: &Self::ATTRIBUTES,
-		}
-	}
 }
 
 #[repr(C)]
-#[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
+#[derive(Default, Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct ColorRingInstance {
 	pub position: [f32; 2],
 	pub radius_major: f32,
@@ -95,21 +84,12 @@ pub struct ColorRingInstance {
 	pub saturation_value: [f32; 2],
 }
 
-impl ColorRingInstance {
+impl InstanceAttributes<5> for ColorRingInstance {
 	const ATTRIBUTES: [wgpu::VertexAttribute; 5] = wgpu::vertex_attr_array![0 => Float32x2, 1 => Float32, 2 => Float32, 3 => Float32, 4 => Float32x2];
-
-	// Returns the layout of buffers composed of instances of Self.
-	pub const fn buffer_layout<'a>() -> VertexBufferLayout<'a> {
-		wgpu::VertexBufferLayout {
-			array_stride: std::mem::size_of::<Self>() as wgpu::BufferAddress,
-			step_mode: wgpu::VertexStepMode::Instance,
-			attributes: &Self::ATTRIBUTES,
-		}
-	}
 }
 
 #[repr(C)]
-#[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
+#[derive(Default, Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct ColorTrigonInstance {
 	pub position: [f32; 2],
 	pub radius: f32,
@@ -117,17 +97,8 @@ pub struct ColorTrigonInstance {
 	pub depth: f32,
 }
 
-impl ColorTrigonInstance {
+impl InstanceAttributes<4> for ColorTrigonInstance {
 	const ATTRIBUTES: [wgpu::VertexAttribute; 4] = wgpu::vertex_attr_array![0 => Float32x2, 1 => Float32, 2 => Float32, 3 => Float32];
-
-	// Returns the layout of buffers composed of instances of Self.
-	pub const fn buffer_layout<'a>() -> VertexBufferLayout<'a> {
-		wgpu::VertexBufferLayout {
-			array_stride: std::mem::size_of::<Self>() as wgpu::BufferAddress,
-			step_mode: wgpu::VertexStepMode::Instance,
-			attributes: &Self::ATTRIBUTES,
-		}
-	}
 }
 
 // This struct stores the current state of the WGPU renderer.
@@ -144,19 +115,11 @@ pub struct Renderer {
 	pub scale_factor: f32,
 	pub is_pending_resize: bool,
 	pub clear_color: wgpu::Color,
-	viewport_buffer: wgpu::Buffer,
-	viewport_bind_group: wgpu::BindGroup,
-	trimesh_render_pipeline: wgpu::RenderPipeline,
-	trimesh_vertex_buffer: DynamicBuffer<Vertex>,
-	trimesh_index_buffer: DynamicBuffer<u16>,
-	card_render_pipeline: wgpu::RenderPipeline,
-	card_instance_buffer: DynamicBuffer<CardInstance>,
-	color_ring_render_pipeline: wgpu::RenderPipeline,
-	color_ring_instance_buffer: DynamicBuffer<ColorRingInstance>,
-	color_trigon_render_pipeline: wgpu::RenderPipeline,
-	color_trigon_instance_buffer: DynamicBuffer<ColorTrigonInstance>,
-	rect_index_buffer: wgpu::Buffer,
-	rect_index_range: Range<u32>,
+	viewport_buffer: UniformBuffer<ViewportUniform>,
+	trigon_renderer: VertexRenderer<Vertex>,
+	card_renderer: InstanceRenderer<CardInstance>,
+	color_ring_renderer: InstanceRenderer<ColorRingInstance>,
+	color_trigon_renderer: InstanceRenderer<ColorTrigonInstance>,
 	multisample_texture: Option<wgpu::Texture>,
 	texture_format: wgpu::TextureFormat,
 }
@@ -229,253 +192,23 @@ impl Renderer {
 			None
 		};
 
-		// Create a viewport uniform buffer and bind group layout.
-		let viewport_bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-			entries: &[wgpu::BindGroupLayoutEntry {
-				binding: 0,
-				visibility: wgpu::ShaderStages::VERTEX,
-				ty: wgpu::BindingType::Buffer {
-					ty: wgpu::BufferBindingType::Uniform,
-					has_dynamic_offset: false,
-					min_binding_size: None,
-				},
-				count: None,
-			}],
-			label: Some("viewport_bind_group_layout"),
-		});
-
-		// We create a render pipeline from the vertex and fragment shaders.
-		let trimesh_render_pipeline = {
-			let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-				label: Some("shader"),
-				source: wgpu::ShaderSource::Wgsl(include_str!("shaders/trigon.wgsl").into()),
-			});
-
-			let render_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-				label: Some("render_pipeline_layout"),
-				bind_group_layouts: &[&viewport_bind_group_layout],
-				push_constant_ranges: &[],
-			});
-
-			// We promise to supply a single vertex buffer in each render pass.
-			device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-				label: Some("render_pipeline"),
-				layout: Some(&render_pipeline_layout),
-				vertex: wgpu::VertexState {
-					module: &shader,
-					entry_point: "vs_main",
-					buffers: &[Vertex::buffer_layout()],
-				},
-				fragment: Some(wgpu::FragmentState {
-					module: &shader,
-					entry_point: "fs_main",
-					targets: &[Some(wgpu::ColorTargetState {
-						format: config.format,
-						blend: Some(wgpu::BlendState::ALPHA_BLENDING),
-						write_mask: wgpu::ColorWrites::ALL,
-					})],
-				}),
-				primitive: wgpu::PrimitiveState {
-					topology: wgpu::PrimitiveTopology::TriangleList,
-					strip_index_format: None,
-					front_face: wgpu::FrontFace::Ccw,
-					cull_mode: None,
-					polygon_mode: wgpu::PolygonMode::Fill,
-					unclipped_depth: false,
-					conservative: false,
-				},
-				depth_stencil: None,
-				multisample: wgpu::MultisampleState {
-					count: multisample_texture.as_ref().map_or_else(|| 1, |_| 4),
-					mask: !0,
-					alpha_to_coverage_enabled: false,
-				},
-				multiview: None,
-			})
-		};
-
-		let card_render_pipeline = {
-			let rect_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-				label: Some("rect_shader"),
-				source: wgpu::ShaderSource::Wgsl(include_str!("shaders/round_rectangle.wgsl").into()),
-			});
-
-			let rect_render_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-				label: Some("rect_render_pipeline_layout"),
-				bind_group_layouts: &[&viewport_bind_group_layout],
-				push_constant_ranges: &[],
-			});
-
-			// We promise to supply a single vertex buffer in each render pass.
-			device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-				label: Some("rect_render_pipeline"),
-				layout: Some(&rect_render_pipeline_layout),
-				vertex: wgpu::VertexState {
-					module: &rect_shader,
-					entry_point: "vs_main",
-					buffers: &[CardInstance::buffer_layout()],
-				},
-				fragment: Some(wgpu::FragmentState {
-					module: &rect_shader,
-					entry_point: "fs_main",
-					targets: &[Some(wgpu::ColorTargetState {
-						format: config.format,
-						blend: Some(wgpu::BlendState::ALPHA_BLENDING),
-						write_mask: wgpu::ColorWrites::ALL,
-					})],
-				}),
-				primitive: wgpu::PrimitiveState {
-					topology: wgpu::PrimitiveTopology::TriangleList,
-					strip_index_format: None,
-					front_face: wgpu::FrontFace::Cw,
-					cull_mode: Some(wgpu::Face::Back),
-					polygon_mode: wgpu::PolygonMode::Fill,
-					unclipped_depth: false,
-					conservative: false,
-				},
-				depth_stencil: None,
-				multisample: wgpu::MultisampleState {
-					count: multisample_texture.as_ref().map_or_else(|| 1, |_| 4),
-					mask: !0,
-					alpha_to_coverage_enabled: false,
-				},
-				multiview: None,
-			})
-		};
-
-		let color_ring_render_pipeline = {
-			let colorwheel_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-				label: Some("colorwheel_shader"),
-				source: wgpu::ShaderSource::Wgsl(include_str!("shaders/color_picker_ring.wgsl").into()),
-			});
-
-			let colorwheel_render_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-				label: Some("colorwheel_render_pipeline_layout"),
-				bind_group_layouts: &[&viewport_bind_group_layout],
-				push_constant_ranges: &[],
-			});
-
-			// We promise to supply a single vertex buffer in each render pass.
-			device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-				label: Some("colorwheel_render_pipeline"),
-				layout: Some(&colorwheel_render_pipeline_layout),
-				vertex: wgpu::VertexState {
-					module: &colorwheel_shader,
-					entry_point: "vs_main",
-					buffers: &[ColorRingInstance::buffer_layout()],
-				},
-				fragment: Some(wgpu::FragmentState {
-					module: &colorwheel_shader,
-					entry_point: "fs_main",
-					targets: &[Some(wgpu::ColorTargetState {
-						format: config.format,
-						blend: Some(wgpu::BlendState::ALPHA_BLENDING),
-						write_mask: wgpu::ColorWrites::ALL,
-					})],
-				}),
-				primitive: wgpu::PrimitiveState {
-					topology: wgpu::PrimitiveTopology::TriangleList,
-					strip_index_format: None,
-					front_face: wgpu::FrontFace::Cw,
-					cull_mode: Some(wgpu::Face::Back),
-					polygon_mode: wgpu::PolygonMode::Fill,
-					unclipped_depth: false,
-					conservative: false,
-				},
-				depth_stencil: None,
-				multisample: wgpu::MultisampleState {
-					count: multisample_texture.as_ref().map_or_else(|| 1, |_| 4),
-					mask: !0,
-					alpha_to_coverage_enabled: false,
-				},
-				multiview: None,
-			})
-		};
-
-		let color_trigon_render_pipeline = {
-			let saturation_value_plot_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-				label: Some("saturation_value_plot_shader"),
-				source: wgpu::ShaderSource::Wgsl(include_str!("shaders/color_picker_trigon.wgsl").into()),
-			});
-
-			let saturation_value_plot_render_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-				label: Some("saturation_value_plot_render_pipeline_layout"),
-				bind_group_layouts: &[&viewport_bind_group_layout],
-				push_constant_ranges: &[],
-			});
-
-			// We promise to supply a single vertex buffer in each render pass.
-			device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-				label: Some("saturation_value_plot_render_pipeline"),
-				layout: Some(&saturation_value_plot_render_pipeline_layout),
-				vertex: wgpu::VertexState {
-					module: &saturation_value_plot_shader,
-					entry_point: "vs_main",
-					buffers: &[ColorTrigonInstance::buffer_layout()],
-				},
-				fragment: Some(wgpu::FragmentState {
-					module: &saturation_value_plot_shader,
-					entry_point: "fs_main",
-					targets: &[Some(wgpu::ColorTargetState {
-						format: config.format,
-						blend: Some(wgpu::BlendState::ALPHA_BLENDING),
-						write_mask: wgpu::ColorWrites::ALL,
-					})],
-				}),
-				primitive: wgpu::PrimitiveState {
-					topology: wgpu::PrimitiveTopology::TriangleList,
-					strip_index_format: None,
-					front_face: wgpu::FrontFace::Cw,
-					cull_mode: Some(wgpu::Face::Back),
-					polygon_mode: wgpu::PolygonMode::Fill,
-					unclipped_depth: false,
-					conservative: false,
-				},
-				depth_stencil: None,
-				multisample: wgpu::MultisampleState {
-					count: multisample_texture.as_ref().map_or_else(|| 1, |_| 4),
-					mask: !0,
-					alpha_to_coverage_enabled: false,
-				},
-				multiview: None,
-			})
-		};
-
-		let viewport_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-			label: Some("viewport_buffer"),
-			contents: bytemuck::cast_slice(&[ViewportUniform {
+		let viewport_buffer = UniformBuffer::new(
+			&device,
+			0,
+			ViewportUniform {
 				position: [0., 0.],
 				size: [width as f32, height as f32],
 				scale: zoom * scale_factor,
 				tilt,
-			}]),
-			usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-		});
+			},
+		);
 
-		let viewport_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-			layout: &viewport_bind_group_layout,
-			entries: &[wgpu::BindGroupEntry {
-				binding: 0,
-				resource: viewport_buffer.as_entire_binding(),
-			}],
-			label: Some("viewport_bind_group"),
-		});
+		let sample_count = multisample_texture.as_ref().map_or_else(|| 1, |_| 4);
 
-		let trimesh_vertex_buffer = DynamicBuffer::<Vertex>::new(&device, wgpu::BufferUsages::VERTEX, 1 << 16);
-		let trimesh_index_buffer = DynamicBuffer::<u16>::new(&device, wgpu::BufferUsages::INDEX, 1 << 16);
-		let card_instance_buffer = DynamicBuffer::<CardInstance>::new(&device, wgpu::BufferUsages::VERTEX, 1 << 0);
-		let color_ring_instance_buffer = DynamicBuffer::<ColorRingInstance>::new(&device, wgpu::BufferUsages::VERTEX, 1 << 0);
-		let color_trigon_instance_buffer = DynamicBuffer::<ColorTrigonInstance>::new(&device, wgpu::BufferUsages::VERTEX, 1 << 0);
-
-		// This index buffer will be used for any roundrect and colorwheel draw calls.
-		const RECT_INDICES: &[u16] = &[0, 1, 2, 0, 2, 3];
-
-		let rect_index_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-			label: Some("rect_index_buffer"),
-			contents: bytemuck::cast_slice(RECT_INDICES),
-			usage: wgpu::BufferUsages::INDEX,
-		});
-		let rect_index_range = 0..RECT_INDICES.len() as u32;
+		let trigon_renderer = VertexRenderer::new(&device, config.format, include_str!("shaders/trigon.wgsl"), "vs_main", "fs_main", &viewport_buffer, sample_count);
+		let card_renderer = InstanceRenderer::new(&device, config.format, include_str!("shaders/round_rectangle.wgsl"), "vs_main", "fs_main", &viewport_buffer, sample_count);
+		let color_ring_renderer = InstanceRenderer::new(&device, config.format, include_str!("shaders/color_picker_ring.wgsl"), "vs_main", "fs_main", &viewport_buffer, sample_count);
+		let color_trigon_renderer = InstanceRenderer::new(&device, config.format, include_str!("shaders/color_picker_trigon.wgsl"), "vs_main", "fs_main", &viewport_buffer, sample_count);
 
 		// We return a new instance of our renderer state.
 		Self {
@@ -492,18 +225,10 @@ impl Renderer {
 			is_pending_resize: false,
 			clear_color: wgpu::Color::BLACK,
 			viewport_buffer,
-			viewport_bind_group,
-			trimesh_render_pipeline,
-			trimesh_vertex_buffer,
-			trimesh_index_buffer,
-			card_render_pipeline,
-			card_instance_buffer,
-			color_ring_render_pipeline,
-			color_ring_instance_buffer,
-			color_trigon_render_pipeline,
-			color_trigon_instance_buffer,
-			rect_index_buffer,
-			rect_index_range,
+			trigon_renderer,
+			card_renderer,
+			color_ring_renderer,
+			color_trigon_renderer,
 			multisample_texture,
 			texture_format,
 		}
@@ -561,15 +286,14 @@ impl Renderer {
 	pub fn render(&mut self, draw_commands: Vec<DrawCommand>) -> Result<(), wgpu::SurfaceError> {
 		if self.is_pending_resize {
 			// We write the new size to the viewport buffer.
-			self.queue.write_buffer(
-				&self.viewport_buffer,
-				0,
-				bytemuck::cast_slice(&[ViewportUniform {
+			self.viewport_buffer.write(
+				&self.queue,
+				ViewportUniform {
 					position: self.position.0.map(Into::into),
 					size: [self.width as f32, self.height as f32],
 					scale: self.zoom * self.scale_factor,
 					tilt: self.tilt,
-				}]),
+				},
 			);
 			self.is_pending_resize = false;
 		}
@@ -631,46 +355,10 @@ impl Renderer {
 			}
 		}
 
-		self.trimesh_vertex_buffer.write(&self.device, &self.queue, strokes_vertices, Vertex { position: [Vx(0.); 3], color: [0.; 4] });
-		self.trimesh_index_buffer.write(&self.device, &self.queue, strokes_indices, 0);
-
-		self.card_instance_buffer.write(
-			&self.device,
-			&self.queue,
-			card_instances,
-			CardInstance {
-				position: [0.; 2],
-				dimensions: [0.; 2],
-				color: [0.; 4],
-				depth: 0.,
-				radius: 0.,
-			},
-		);
-
-		self.color_ring_instance_buffer.write(
-			&self.device,
-			&self.queue,
-			color_ring_instances,
-			ColorRingInstance {
-				position: [0.; 2],
-				radius_major: 0.,
-				radius_minor: 0.,
-				depth: 0.,
-				saturation_value: [0.; 2],
-			},
-		);
-
-		self.color_trigon_instance_buffer.write(
-			&self.device,
-			&self.queue,
-			color_trigon_instances,
-			ColorTrigonInstance {
-				position: [0.; 2],
-				radius: 0.,
-				hue: 0.,
-				depth: 0.,
-			},
-		);
+		self.trigon_renderer.prepare(&self.device, &self.queue, strokes_vertices, strokes_indices);
+		self.card_renderer.prepare(&self.device, &self.queue, card_instances);
+		self.color_ring_renderer.prepare(&self.device, &self.queue, color_ring_instances);
+		self.color_trigon_renderer.prepare(&self.device, &self.queue, color_trigon_instances);
 
 		// Set up the surface texture we will later render to.
 		let output = self.surface.get_current_texture()?;
@@ -696,33 +384,13 @@ impl Renderer {
 			depth_stencil_attachment: None,
 		});
 
-		render_pass.set_bind_group(0, &self.viewport_bind_group, &[]);
+		self.viewport_buffer.activate(&mut render_pass, 0);
 		for render_command in render_commands {
 			match render_command {
-				RenderCommand::Trimesh(index_range) => {
-					render_pass.set_pipeline(&self.trimesh_render_pipeline);
-					render_pass.set_vertex_buffer(0, self.trimesh_vertex_buffer.buffer.slice(..));
-					render_pass.set_index_buffer(self.trimesh_index_buffer.buffer.slice(..), wgpu::IndexFormat::Uint16);
-					render_pass.draw_indexed(index_range, 0, 0..1);
-				},
-				RenderCommand::Card(instance_range) => {
-					render_pass.set_pipeline(&self.card_render_pipeline);
-					render_pass.set_vertex_buffer(0, self.card_instance_buffer.buffer.slice(..));
-					render_pass.set_index_buffer(self.rect_index_buffer.slice(..), wgpu::IndexFormat::Uint16);
-					render_pass.draw_indexed(self.rect_index_range.clone(), 0, instance_range);
-				},
-				RenderCommand::ColorRing(instance_range) => {
-					render_pass.set_pipeline(&self.color_ring_render_pipeline);
-					render_pass.set_vertex_buffer(0, self.color_ring_instance_buffer.buffer.slice(..));
-					render_pass.set_index_buffer(self.rect_index_buffer.slice(..), wgpu::IndexFormat::Uint16);
-					render_pass.draw_indexed(self.rect_index_range.clone(), 0, instance_range);
-				},
-				RenderCommand::ColorTrigon(instance_range) => {
-					render_pass.set_pipeline(&self.color_trigon_render_pipeline);
-					render_pass.set_vertex_buffer(0, self.color_trigon_instance_buffer.buffer.slice(..));
-					render_pass.set_index_buffer(self.rect_index_buffer.slice(..), wgpu::IndexFormat::Uint16);
-					render_pass.draw_indexed(self.rect_index_range.clone(), 0, instance_range);
-				},
+				RenderCommand::Trimesh(index_range) => self.trigon_renderer.render(&mut render_pass, index_range),
+				RenderCommand::Card(instance_range) => self.card_renderer.render(&mut render_pass, instance_range),
+				RenderCommand::ColorRing(instance_range) => self.color_ring_renderer.render(&mut render_pass, instance_range),
+				RenderCommand::ColorTrigon(instance_range) => self.color_trigon_renderer.render(&mut render_pass, instance_range),
 			}
 		}
 
