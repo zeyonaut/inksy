@@ -203,11 +203,13 @@ impl App {
 					// Ignore all other window events.
 					_ => {},
 				}
+			},
 
+			Event::MainEventsCleared => {
 				self.poll_tablet();
 				self.process_input();
 				self.window.request_redraw();
-			},
+			}
 
 			// If a window redraw is requested, have the renderer update and render.
 			Event::RedrawRequested(window_id) if window_id == self.window.id() => {
