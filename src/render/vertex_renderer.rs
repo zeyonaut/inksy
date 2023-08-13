@@ -9,8 +9,7 @@ use std::{borrow::Cow, ops::Range};
 
 use super::{
 	buffer::DynamicBuffer,
-	instance_renderer::InstanceRenderer,
-	uniform_buffer::{self, UniformBuffer},
+	uniform_buffer::UniformBuffer,
 	ViewportUniform,
 };
 
@@ -33,7 +32,7 @@ pub trait VertexAttributes<const N: usize> {
 pub struct VertexRenderer<Vertex> {
 	render_pipeline: wgpu::RenderPipeline,
 	vertex_buffer: DynamicBuffer<Vertex>,
-	index_buffer: DynamicBuffer<u16>,
+	index_buffer: DynamicBuffer<u32>,
 }
 
 impl<Vertex> VertexRenderer<Vertex> {
@@ -88,11 +87,11 @@ impl<Vertex> VertexRenderer<Vertex> {
 		});
 
 		let vertex_buffer = DynamicBuffer::<Vertex>::new(&device, wgpu::BufferUsages::VERTEX, 1 << 16);
-		let index_buffer = DynamicBuffer::<u16>::new(&device, wgpu::BufferUsages::INDEX, 1 << 16);
+		let index_buffer = DynamicBuffer::<u32>::new(&device, wgpu::BufferUsages::INDEX, 1 << 16);
 
 		Self { render_pipeline, vertex_buffer, index_buffer }
 	}
-	pub fn prepare(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, vertices: Vec<Vertex>, indices: Vec<u16>)
+	pub fn prepare(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, vertices: Vec<Vertex>, indices: Vec<u32>)
 	where
 		Vertex: bytemuck::Pod + Default,
 	{
@@ -103,7 +102,7 @@ impl<Vertex> VertexRenderer<Vertex> {
 	pub fn render<'r>(&'r self, render_pass: &mut wgpu::RenderPass<'r>, index_range: Range<u32>) {
 		render_pass.set_pipeline(&self.render_pipeline);
 		render_pass.set_vertex_buffer(0, self.vertex_buffer.buffer.slice(..));
-		render_pass.set_index_buffer(self.index_buffer.buffer.slice(..), wgpu::IndexFormat::Uint16);
+		render_pass.set_index_buffer(self.index_buffer.buffer.slice(..), wgpu::IndexFormat::Uint32);
 		render_pass.draw_indexed(index_range, 0, 0..1);
 	}
 }

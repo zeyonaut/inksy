@@ -27,7 +27,7 @@ use crate::pixel::{Px, Vex, Vx};
 const SHOULD_MULTISAMPLE: bool = false;
 
 pub enum DrawCommand {
-	Trimesh { vertices: Vec<Vertex>, indices: Vec<u16> },
+	Trimesh { vertices: Vec<Vertex>, indices: Vec<u32> },
 	Card { position: Vex<2, Px>, dimensions: Vex<2, Px>, color: [u8; 4], radius: Px },
 	ColorSelector { position: Vex<2, Px>, hsv: [f32; 3], trigon_radius: Px, hole_radius: Px, ring_width: Px },
 }
@@ -299,7 +299,7 @@ impl Renderer {
 		}
 
 		let mut strokes_vertices: Vec<Vertex> = vec![];
-		let mut strokes_indices: Vec<u16> = vec![];
+		let mut strokes_indices: Vec<u32> = vec![];
 		let mut card_instances: Vec<CardInstance> = vec![];
 		let mut color_ring_instances: Vec<ColorRingInstance> = vec![];
 		let mut color_trigon_instances: Vec<ColorTrigonInstance> = vec![];
@@ -309,7 +309,7 @@ impl Renderer {
 		for draw_command in draw_commands {
 			match draw_command {
 				DrawCommand::Trimesh { mut vertices, indices } => {
-					let vertex_start = strokes_vertices.len() as u16;
+					let vertex_start = strokes_vertices.len() as u32;
 					let index_start = strokes_indices.len() as u32;
 					strokes_vertices.append(&mut vertices);
 					strokes_indices.extend(indices.into_iter().map(|i| vertex_start + i));
