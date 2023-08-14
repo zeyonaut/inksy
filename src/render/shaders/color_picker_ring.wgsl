@@ -6,8 +6,8 @@
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
 struct ViewportUniform {
-	position: vec2<f32>,
-	size: vec2<f32>,
+	position: vec2f,
+	size: vec2f,
 	scale: f32,
 	tilt: f32,
 }
@@ -15,26 +15,26 @@ struct ViewportUniform {
 @group(0) @binding(0) var<uniform> viewport: ViewportUniform;
 
 struct VertexInput {
-	@location(0) position: vec2<f32>,
+	@location(0) position: vec2f,
 	@location(1) radius_major: f32,
 	@location(2) radius_minor: f32,
 	@location(3) depth: f32,
-	@location(4) saturation_value: vec2<f32>,
+	@location(4) saturation_value: vec2f,
 }
 
 struct VertexOutput {
-	@builtin(position) position: vec4<f32>,
-	@location(0) center: vec2<f32>,
+	@builtin(position) position: vec4f,
+	@location(0) center: vec2f,
 	@location(1) radius_major: f32,
 	@location(2) radius_minor: f32,
-	@location(3) saturation_value: vec2<f32>,
+	@location(3) saturation_value: vec2f,
 }
 
-var<private> vertices: array<vec2<f32>, 4> = array<vec2<f32>, 4>(
-	vec2<f32>(0., 0.),
-	vec2<f32>(2., 0.),
-	vec2<f32>(2., 2.),
-	vec2<f32>(0., 2.),
+var<private> vertices: array<vec2f, 4> = array<vec2f, 4>(
+	vec2f(0., 0.),
+	vec2f(2., 0.),
+	vec2f(2., 2.),
+	vec2f(0., 2.),
 );
 
 @vertex
@@ -49,16 +49,16 @@ fn vs_main(shape: VertexInput, @builtin(vertex_index) index: u32) -> VertexOutpu
 	return out;
 }
 
-fn hue(h: f32) -> vec3<f32> {
+fn hue(h: f32) -> vec3f {
 	return saturate(vec3(abs(h * 6. - 3.) - 1., 2. - abs(h * 6. - 2.), 2. - abs(h * 6. - 4.)));
 }
 
-fn hsv_to_srgb(color: vec3<f32>) -> vec3<f32> {
+fn hsv_to_srgb(color: vec3f) -> vec3f {
 	return ((hue(color.x) - 1.) * color.y + 1.) * color.z;
 }
 
 // IEC 61966-2-1
-fn srgb_to_linear(color: vec3<f32>) -> vec3<f32> {
+fn srgb_to_linear(color: vec3f) -> vec3f {
   return mix(pow((color + 0.055) * (1. / 1.055), vec3(2.4)), color * (1. / 12.92), step(color, vec3(0.04045)));
 }
 
@@ -70,7 +70,7 @@ fn blurred_step(edge: f32, value: f32) -> f32 {
 }
 
 @fragment
-fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
+fn fs_main(in: VertexOutput) -> @location(0) vec4f {
 	let vector = in.position.xy - in.center;
 	let distance_from_center = length(vector);
 	let color_hsv = vec3(atan2(vector.y, vector.x) / (2. * PI) + 0.5, in.saturation_value);

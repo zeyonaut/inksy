@@ -7,6 +7,7 @@
 
 mod buffer;
 mod instance_renderer;
+mod texture;
 mod uniform_buffer;
 mod vertex_renderer;
 
@@ -19,6 +20,7 @@ use wgpu::SurfaceTexture;
 
 use self::{
 	instance_renderer::{InstanceAttributes, InstanceRenderer},
+	texture::Texture,
 	uniform_buffer::UniformBuffer,
 	vertex_renderer::{VertexAttributes, VertexRenderer},
 };
@@ -30,6 +32,7 @@ pub enum DrawCommand {
 	Trimesh { vertices: Vec<Vertex>, indices: Vec<u32> },
 	Card { position: Vex<2, Px>, dimensions: Vex<2, Px>, color: [u8; 4], radius: Px },
 	ColorSelector { position: Vex<2, Px>, hsv: [f32; 3], trigon_radius: Px, hole_radius: Px, ring_width: Px },
+	Texture { position: Vex<2, Vx>, dimensions: Vex<2, Vx>, index: usize },
 }
 
 pub enum RenderCommand {
@@ -37,6 +40,7 @@ pub enum RenderCommand {
 	Card(Range<u32>),
 	ColorRing(Range<u32>),
 	ColorTrigon(Range<u32>),
+	Texture(usize),
 }
 
 // This struct stores the data of each vertex to be rendered.
@@ -58,6 +62,19 @@ pub struct ViewportUniform {
 	pub size: [f32; 2],
 	pub scale: f32,
 	pub tilt: f32,
+}
+
+#[repr(C)]
+#[derive(Default, Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
+struct CanvasImageInstance {
+	pub position: [f32; 2],
+	pub dimensions: [f32; 2],
+	pub sprite_position: [f32; 2],
+	pub sprite_dimensions: [f32; 2],
+}
+
+impl InstanceAttributes<4> for CanvasImageInstance {
+	const ATTRIBUTES: [wgpu::VertexAttribute; 4] = wgpu::vertex_attr_array![0 => Float32x2, 1 => Float32x2, 2 => Float32x2, 3 => Float32x2];
 }
 
 #[repr(C)]
@@ -116,7 +133,10 @@ pub struct Renderer {
 	pub is_pending_resize: bool,
 	pub clear_color: wgpu::Color,
 	viewport_buffer: UniformBuffer<ViewportUniform>,
+	texture_bind_group_layout: wgpu::BindGroupLayout,
+	textures: Vec<Texture>,
 	trigon_renderer: VertexRenderer<Vertex>,
+	canvas_image_renderer: InstanceRenderer<CanvasImageInstance>,
 	card_renderer: InstanceRenderer<CardInstance>,
 	color_ring_renderer: InstanceRenderer<ColorRingInstance>,
 	color_trigon_renderer: InstanceRenderer<ColorTrigonInstance>,
@@ -177,6 +197,9 @@ impl Renderer {
 		};
 		surface.configure(&device, &config);
 
+		//let atlas = DynamicTextureAtlas::new(&device);
+		let texture_bind_group_layout = Texture::bind_group_layout(&device);
+
 		let multisample_texture = if adapter.get_texture_format_features(texture_format).flags.sample_count_supported(4) && SHOULD_MULTISAMPLE {
 			Some(device.create_texture(&wgpu::TextureDescriptor {
 				label: None,
@@ -206,9 +229,18 @@ impl Renderer {
 		let sample_count = multisample_texture.as_ref().map_or_else(|| 1, |_| 4);
 
 		let trigon_renderer = VertexRenderer::new(&device, config.format, include_str!("shaders/trigon.wgsl"), "vs_main", "fs_main", &viewport_buffer, sample_count);
-		let card_renderer = InstanceRenderer::new(&device, config.format, include_str!("shaders/round_rectangle.wgsl"), "vs_main", "fs_main", &viewport_buffer, sample_count);
-		let color_ring_renderer = InstanceRenderer::new(&device, config.format, include_str!("shaders/color_picker_ring.wgsl"), "vs_main", "fs_main", &viewport_buffer, sample_count);
-		let color_trigon_renderer = InstanceRenderer::new(&device, config.format, include_str!("shaders/color_picker_trigon.wgsl"), "vs_main", "fs_main", &viewport_buffer, sample_count);
+		let canvas_image_renderer = InstanceRenderer::new(
+			&device,
+			config.format,
+			include_str!("shaders/canvas_image.wgsl"),
+			"vs_main",
+			"fs_main",
+			&[&viewport_buffer.bind_group_layout, &texture_bind_group_layout],
+			sample_count,
+		);
+		let card_renderer = InstanceRenderer::new(&device, config.format, include_str!("shaders/round_rectangle.wgsl"), "vs_main", "fs_main", &[&viewport_buffer.bind_group_layout], sample_count);
+		let color_ring_renderer = InstanceRenderer::new(&device, config.format, include_str!("shaders/color_picker_ring.wgsl"), "vs_main", "fs_main", &[&viewport_buffer.bind_group_layout], sample_count);
+		let color_trigon_renderer = InstanceRenderer::new(&device, config.format, include_str!("shaders/color_picker_trigon.wgsl"), "vs_main", "fs_main", &[&viewport_buffer.bind_group_layout], sample_count);
 
 		// We return a new instance of our renderer state.
 		Self {
@@ -225,7 +257,10 @@ impl Renderer {
 			is_pending_resize: false,
 			clear_color: wgpu::Color::BLACK,
 			viewport_buffer,
+			texture_bind_group_layout,
+			textures: vec![],
 			trigon_renderer,
+			canvas_image_renderer,
 			card_renderer,
 			color_ring_renderer,
 			color_trigon_renderer,
@@ -298,6 +333,7 @@ impl Renderer {
 			self.is_pending_resize = false;
 		}
 
+		let mut canvas_image_instances: Vec<CanvasImageInstance> = vec![];
 		let mut strokes_vertices: Vec<Vertex> = vec![];
 		let mut strokes_indices: Vec<u32> = vec![];
 		let mut card_instances: Vec<CardInstance> = vec![];
@@ -352,13 +388,29 @@ impl Renderer {
 					});
 					render_commands.push(RenderCommand::ColorTrigon(trigon_instance_start..trigon_instance_start + 1));
 				},
+				DrawCommand::Texture { index, position, dimensions } => {
+					if let Some(texture) = self.textures.get(index) {
+						canvas_image_instances.push(CanvasImageInstance {
+							position: position.0.map(|Vx(x)| x),
+							dimensions: dimensions.0.map(|Vx(x)| x),
+							sprite_position: [0.; 2],
+							sprite_dimensions: [texture.texture_size.width as f32, texture.texture_size.height as f32],
+						});
+						render_commands.push(RenderCommand::Texture(index));
+					}
+				},
 			}
 		}
 
+		self.canvas_image_renderer.prepare(&self.device, &self.queue, canvas_image_instances);
 		self.trigon_renderer.prepare(&self.device, &self.queue, strokes_vertices, strokes_indices);
 		self.card_renderer.prepare(&self.device, &self.queue, card_instances);
 		self.color_ring_renderer.prepare(&self.device, &self.queue, color_ring_instances);
 		self.color_trigon_renderer.prepare(&self.device, &self.queue, color_trigon_instances);
+
+		for texture in self.textures.iter_mut() {
+			texture.prepare(&self.queue);
+		}
 
 		// Set up the surface texture we will later render to.
 		let output = self.surface.get_current_texture()?;
@@ -385,12 +437,17 @@ impl Renderer {
 		});
 
 		self.viewport_buffer.activate(&mut render_pass, 0);
+
 		for render_command in render_commands {
 			match render_command {
 				RenderCommand::Trimesh(index_range) => self.trigon_renderer.render(&mut render_pass, index_range),
 				RenderCommand::Card(instance_range) => self.card_renderer.render(&mut render_pass, instance_range),
 				RenderCommand::ColorRing(instance_range) => self.color_ring_renderer.render(&mut render_pass, instance_range),
 				RenderCommand::ColorTrigon(instance_range) => self.color_trigon_renderer.render(&mut render_pass, instance_range),
+				RenderCommand::Texture(index) => {
+					self.textures[index].activate(&mut render_pass, 1);
+					self.canvas_image_renderer.render(&mut render_pass, index as u32..index as u32 + 1);
+				},
 			}
 		}
 
@@ -434,5 +491,10 @@ impl Renderer {
 
 		// Return successfully.
 		Ok(output)
+	}
+
+	pub fn push_texture(&mut self, dimensions: [u32; 2], image: Vec<u8>) -> usize {
+		self.textures.push(Texture::new(&self.device, dimensions, image, &self.texture_bind_group_layout));
+		self.textures.len() - 1
 	}
 }

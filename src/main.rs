@@ -13,6 +13,7 @@
 
 mod actions;
 mod app;
+mod clipboard;
 #[path = "input/_.rs"]
 mod input;
 mod pixel;

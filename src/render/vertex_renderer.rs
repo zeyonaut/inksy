@@ -7,11 +7,7 @@
 
 use std::{borrow::Cow, ops::Range};
 
-use super::{
-	buffer::DynamicBuffer,
-	uniform_buffer::UniformBuffer,
-	ViewportUniform,
-};
+use super::{buffer::DynamicBuffer, uniform_buffer::UniformBuffer, ViewportUniform};
 
 pub trait VertexAttributes<const N: usize> {
 	const ATTRIBUTES: [wgpu::VertexAttribute; N];

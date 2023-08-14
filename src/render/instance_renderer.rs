@@ -9,7 +9,7 @@ use std::{borrow::Cow, ops::Range};
 
 use wgpu::util::DeviceExt;
 
-use super::{buffer::DynamicBuffer, uniform_buffer::UniformBuffer, ViewportUniform};
+use super::buffer::DynamicBuffer;
 
 // NOTE: Ideally, the N should be an associated constant and not a parameter, but that isn't possible right now.
 pub trait InstanceAttributes<const N: usize> {
@@ -35,7 +35,7 @@ pub struct InstanceRenderer<Instance> {
 }
 
 impl<Instance> InstanceRenderer<Instance> {
-	pub fn new<'a, const N: usize>(device: &wgpu::Device, texture_format: wgpu::TextureFormat, shader_source: impl Into<Cow<'a, str>>, vertex_main: &str, fragment_main: &str, viewport_buffer: &UniformBuffer<ViewportUniform>, sample_count: u32) -> Self
+	pub fn new<'a, const N: usize>(device: &wgpu::Device, texture_format: wgpu::TextureFormat, shader_source: impl Into<Cow<'a, str>>, vertex_main: &str, fragment_main: &str, bind_group_layouts: &[&wgpu::BindGroupLayout], sample_count: u32) -> Self
 	where
 		Instance: InstanceAttributes<N>,
 	{
@@ -46,7 +46,7 @@ impl<Instance> InstanceRenderer<Instance> {
 
 		let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
 			label: None,
-			bind_group_layouts: &[&viewport_buffer.bind_group_layout],
+			bind_group_layouts,
 			push_constant_ranges: &[],
 		});
 

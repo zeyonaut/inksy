@@ -25,6 +25,7 @@ use crate::input::linux::*;
 use crate::input::wintab::*;
 use crate::{
 	actions::default_keymap,
+	clipboard::Clipboard,
 	input::{
 		keymap::{execute_keymap, Keymap},
 		Button, InputMonitor, Key,
@@ -53,6 +54,7 @@ pub enum ClipboardContents {
 // Current state of our app.
 pub struct App {
 	pub window: winit::window::Window,
+	pub clipboard: Clipboard,
 	pub pending_resize: Option<winit::dpi::PhysicalSize<u32>>,
 	pub should_redraw: bool,
 	pub renderer: Renderer,
@@ -120,6 +122,7 @@ impl App {
 		// Return a new instance of the app state.
 		Self {
 			window,
+			clipboard: Clipboard::new().unwrap(),
 			pending_resize: None,
 			should_redraw: false,
 			renderer,
@@ -209,7 +212,7 @@ impl App {
 				self.poll_tablet();
 				self.process_input();
 				self.window.request_redraw();
-			}
+			},
 
 			// If a window redraw is requested, have the renderer update and render.
 			Event::RedrawRequested(window_id) if window_id == self.window.id() => {
@@ -242,17 +245,13 @@ impl App {
 		let semidimensions = Vex([self.renderer.width as f32 / 2., self.renderer.height as f32 / 2.].map(Px)).s(self.scale).z(self.zoom);
 		let cursor_virtual_position = (self.cursor_physical_position.s(self.scale).z(self.zoom) - semidimensions).rotate(-self.tilt);
 
-		// Draw brushstrokes.
+		// Draw brushstrokes and images.
 		let selection_offset = if let Tool::Move { origin: Some(origin) } = &self.mode_stack.base_mode {
 			Some(self.position + cursor_virtual_position - *origin)
 		} else {
 			None
 		};
-		let (strokes_vertices, strokes_indices) = self.canvas.bake(self.mode_stack.current_stroke(), selection_offset);
-		draw_commands.push(DrawCommand::Trimesh {
-			vertices: strokes_vertices,
-			indices: strokes_indices,
-		});
+		self.canvas.bake(&mut draw_commands, self.mode_stack.current_stroke(), selection_offset);
 
 		match &self.mode_stack.get() {
 			Tool::Select { origin: Some(origin) } => {

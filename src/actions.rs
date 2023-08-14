@@ -9,12 +9,13 @@ use enumset::EnumSet;
 
 use crate::{
 	app::{App, ClipboardContents},
+	clipboard::ClipboardData,
 	input::{
 		keymap::{Action, Keymap},
 		Key,
 	},
-	pixel::{Px, Vex},
-	stroke::Stroke,
+	pixel::{Px, Vex, Vx},
+	stroke::{Image, Stroke},
 	tools::TransientModeSwitch,
 	utility::hsv_to_srgba8,
 };
@@ -154,6 +155,8 @@ fn cut(app: &mut App) {
 			})
 			.collect(),
 	));
+
+	app.clipboard.write(ClipboardData::Custom);
 }
 
 fn copy(app: &mut App) {
@@ -173,24 +176,40 @@ fn copy(app: &mut App) {
 				max_pressure: stroke.max_pressure,
 			})
 			.collect::<Vec<_>>(),
-	))
+	));
+
+	app.clipboard.write(ClipboardData::Custom);
 }
 
 fn paste(app: &mut App) {
-	if let Some(ClipboardContents::Subcanvas(strokes)) = app.clipboard_contents.as_ref() {
-		let semidimensions = Vex([app.renderer.width as f32 / 2., app.renderer.height as f32 / 2.].map(Px)).s(app.scale).z(app.zoom);
-		let cursor_virtual_position = (app.cursor_physical_position.s(app.scale).z(app.zoom) - semidimensions).rotate(-app.tilt);
-		for stroke in app.canvas.strokes.iter_mut() {
-			stroke.is_selected = false;
-		}
-		let offset = cursor_virtual_position + app.position;
-		app.canvas.strokes.extend(strokes.iter().map(|stroke| Stroke {
-			origin: stroke.origin + offset,
-			color: stroke.color,
-			points: stroke.points.clone(),
-			is_selected: true,
-			max_pressure: stroke.max_pressure,
-		}));
+	match app.clipboard.read() {
+		Some(ClipboardData::Custom) => {
+			if let Some(ClipboardContents::Subcanvas(strokes)) = app.clipboard_contents.as_ref() {
+				let semidimensions = Vex([app.renderer.width as f32 / 2., app.renderer.height as f32 / 2.].map(Px)).s(app.scale).z(app.zoom);
+				let cursor_virtual_position = (app.cursor_physical_position.s(app.scale).z(app.zoom) - semidimensions).rotate(-app.tilt);
+				for stroke in app.canvas.strokes.iter_mut() {
+					stroke.is_selected = false;
+				}
+				let offset = cursor_virtual_position + app.position;
+				app.canvas.strokes.extend(strokes.iter().map(|stroke| Stroke {
+					origin: stroke.origin + offset,
+					color: stroke.color,
+					points: stroke.points.clone(),
+					is_selected: true,
+					max_pressure: stroke.max_pressure,
+				}));
+			}
+		},
+		Some(ClipboardData::Image { dimensions, data }) => {
+			let texture_index = app.renderer.push_texture(dimensions, data);
+
+			app.canvas.images.push(Image {
+				texture_index,
+				position: app.position,
+				dimensions: Vex(dimensions.map(|x| Vx(x as f32))),
+			});
+		},
+		_ => {},
 	}
 }
 

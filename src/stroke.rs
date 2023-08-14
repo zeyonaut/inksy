@@ -9,13 +9,20 @@ use fast_srgb8::srgb8_to_f32;
 
 use crate::{
 	pixel::{Vex, Vx, Vx2, Zero},
-	render::Vertex,
+	render::{DrawCommand, Vertex},
 };
 
 #[derive(Clone)]
 pub struct Point {
 	position: Vex<2, Vx>,
 	pressure: f32,
+}
+
+#[derive(Clone)]
+pub struct Image {
+	pub texture_index: usize,
+	pub position: Vex<2, Vx>,
+	pub dimensions: Vex<2, Vx>,
 }
 
 #[derive(Clone)]
@@ -56,12 +63,13 @@ impl Stroke {
 }
 
 pub struct Canvas {
+	pub images: Vec<Image>,
 	pub strokes: Vec<Stroke>,
 }
 
 impl Canvas {
 	pub fn new() -> Self {
-		Self { strokes: Vec::new() }
+		Self { images: Vec::new(), strokes: Vec::new() }
 	}
 
 	pub fn select(&mut self, min: Vex<2, Vx>, max: Vex<2, Vx>, tilt: f32, screen_center: Vex<2, Vx>, should_aggregate: bool) {
@@ -87,7 +95,15 @@ impl Canvas {
 		}
 	}
 
-	pub fn bake(&self, current_stroke: Option<&Stroke>, selection_offset: Option<Vex<2, Vx>>) -> (Vec<Vertex>, Vec<u32>) {
+	pub fn bake(&self, draw_commands: &mut Vec<DrawCommand>, current_stroke: Option<&Stroke>, selection_offset: Option<Vex<2, Vx>>) {
+		for image in self.images.iter() {
+			draw_commands.push(DrawCommand::Texture {
+				position: image.position,
+				dimensions: image.dimensions,
+				index: image.texture_index,
+			});
+		}
+
 		let mut vertices = vec![];
 		let mut indices = vec![];
 		const BORDER_RADIUS: Vx = Vx(6.);
@@ -206,6 +222,6 @@ impl Canvas {
 			}
 		}
 
-		(vertices, indices)
+		draw_commands.push(DrawCommand::Trimesh { vertices, indices });
 	}
 }
