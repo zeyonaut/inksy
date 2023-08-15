@@ -183,28 +183,12 @@ impl TabletContext {
 		}
 	}
 
-	pub fn get_queue_size(&self) -> isize {
-		unsafe { (self.wintab.WTQueueSizeGet)(self.handle) as isize }
-	}
-
 	pub fn get_packets(&mut self, num: usize) -> Box<[Packet]> {
 		unsafe {
 			let mut buf = Vec::with_capacity(num);
 			let len = (self.wintab.WTPacketsGet)(self.handle, num as c_int, buf.as_mut_ptr() as *mut c_void) as usize;
 			buf.set_len(len);
 			buf.into_boxed_slice()
-		}
-	}
-
-	pub fn get(&self) -> Option<LogicalContext> {
-		unsafe {
-			let mut logical_context: LogicalContext = std::mem::zeroed();
-			let success = (self.wintab.WTGetA)(self.handle, &mut logical_context);
-			if success != 0 {
-				Some(logical_context)
-			} else {
-				None
-			}
 		}
 	}
 }

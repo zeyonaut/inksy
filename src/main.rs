@@ -13,13 +13,13 @@
 
 mod actions;
 mod app;
+mod canvas;
 mod clipboard;
 #[path = "input/_.rs"]
 mod input;
 mod pixel;
 #[path = "render/_.rs"]
 mod render;
-mod canvas;
 mod tools;
 mod utility;
 #[cfg(target_os = "windows")]

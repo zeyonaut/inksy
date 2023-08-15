@@ -31,7 +31,7 @@ fn rotate(v: vec2f, angle: f32) -> vec2f {
 @vertex
 fn vs_main(model: VertexInput) -> VertexOutput {
 	var out: VertexOutput;
-	out.position = vec4f(rotate((model.position.xy - viewport.position) * viewport.scale, viewport.tilt) / viewport.size * vec2f(2.0, -2.0), model.position.z, 1.0);
+	out.position = vec4f(rotate((model.position.xy - viewport.position) * viewport.scale, viewport.tilt) / viewport.size * vec2f(2., -2.), model.position.z, 1.);
 	out.color = model.color;
 	return out;
 }

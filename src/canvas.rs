@@ -158,7 +158,7 @@ impl Canvas {
 					let mut strokes = Vec::with_capacity(length);
 
 					debug_assert!(length <= self.strokes.len());
-					for i in 0..length {
+					for _ in 0..length {
 						strokes.push(self.strokes.pop().unwrap());
 					}
 

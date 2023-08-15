@@ -39,7 +39,7 @@ var<private> vertices: array<vec2f, 4> = array<vec2f, 4>(
 fn vs_main(shape: VertexInput, @builtin(vertex_index) index: u32) -> VertexOutput {
 	var out: VertexOutput;
 	let position = shape.position;
-	out.position = vec4((vertices[index] * (shape.radius + 4.) - 2. + position) / viewport.size * vec2(2.0, -2.0) + vec2(-1.0, 1.0), shape.depth, 1.0);
+	out.position = vec4((vertices[index] * (shape.radius + 4.) - 2. + position) / viewport.size * vec2(2., -2.) + vec2(-1., 1.), shape.depth, 1.);
 	out.origin = position + shape.radius;
 	out.radius = shape.radius;
 	out.hue = shape.hue;

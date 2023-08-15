@@ -32,17 +32,17 @@ struct VertexOutput {
 }
 
 var<private> vertices: array<vec2f, 4> = array<vec2f, 4>(
-	vec2f(0.0, 0.0),
-	vec2f(1.0, 0.0),
-	vec2f(1.0, 1.0),
-	vec2f(0.0, 1.0),
+	vec2f(0., 0.),
+	vec2f(1., 0.),
+	vec2f(1., 1.),
+	vec2f(0., 1.),
 );
 
 @vertex
 fn vs_main(shape: VertexInput, @builtin(vertex_index) index: u32, @builtin(instance_index) instance_index: u32) -> VertexOutput {
 	var out: VertexOutput;
 	let position = shape.position;
-	out.position = vec4f((vertices[index] * (shape.dimensions + 4.) - 2. + position) / viewport.size * vec2f(2.0, -2.0) + vec2f(-1.0, 1.0), shape.depth, 1.0);
+	out.position = vec4f((vertices[index] * (shape.dimensions + 4.) - 2. + position) / viewport.size * vec2f(2., -2.) + vec2f(-1., 1.), shape.depth, 1.);
 	out.sposition = position;
 	out.dimensions = shape.dimensions;
 	out.color = shape.color;

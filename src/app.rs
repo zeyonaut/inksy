@@ -21,6 +21,7 @@ use crate::input::linux::*;
 use crate::input::wintab::*;
 use crate::{
 	actions::default_keymap,
+	canvas::{Canvas, Operation, Stroke},
 	clipboard::Clipboard,
 	input::{
 		keymap::{execute_keymap, Keymap},
@@ -28,7 +29,6 @@ use crate::{
 	},
 	pixel::{Lx, Px, Scale, Vex, Vx, Zero, Zoom},
 	render::{DrawCommand, Renderer},
-	canvas::{Canvas, Operation, Stroke},
 	tools::*,
 	utility::hsv_to_srgba8,
 };
@@ -521,7 +521,10 @@ impl App {
 						let selected_indices = self.canvas.strokes().iter().enumerate().filter_map(|(index, stroke)| if stroke.is_selected { Some(index) } else { None }).collect::<Vec<_>>();
 
 						if selected_indices.len() > 0 {
-							self.canvas.perform_operation(Operation::TranslateStrokes { indices: selected_indices, vector: selection_offset });
+							self.canvas.perform_operation(Operation::TranslateStrokes {
+								indices: selected_indices,
+								vector: selection_offset,
+							});
 						}
 					}
 				}

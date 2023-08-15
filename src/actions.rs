@@ -9,13 +9,13 @@ use enumset::EnumSet;
 
 use crate::{
 	app::{App, ClipboardContents},
+	canvas::{Image, Operation, Stroke},
 	clipboard::ClipboardData,
 	input::{
 		keymap::{Action, Keymap},
 		Key,
 	},
 	pixel::{Px, Vex, Vx},
-	canvas::{Operation, Image, Stroke},
 	tools::TransientModeSwitch,
 	utility::hsv_to_srgba8,
 };
@@ -188,27 +188,23 @@ fn copy(app: &mut App) {
 	let semidimensions = Vex([app.renderer.width as f32 / 2., app.renderer.height as f32 / 2.].map(Px)).s(app.scale).z(app.zoom);
 	let cursor_virtual_position = (app.cursor_physical_position.s(app.scale).z(app.zoom) - semidimensions).rotate(-app.tilt);
 	let offset = cursor_virtual_position + app.position;
-	
-	let (indices, strokes): (Vec<_>, Vec<_>) = app
+
+	let strokes: Vec<_> = app
 		.canvas
 		.strokes()
 		.iter()
-		.enumerate()
-		.filter_map(|(index, stroke)| {
+		.filter_map(|stroke| {
 			if stroke.is_selected {
-				Some((
-					index,
-					Stroke {
-						origin: stroke.origin - offset,
-						is_selected: true,
-						..stroke.clone()
-					},
-				))
+				Some(Stroke {
+					origin: stroke.origin - offset,
+					is_selected: true,
+					..stroke.clone()
+				})
 			} else {
 				None
 			}
 		})
-		.unzip();
+		.collect();
 
 	app.clipboard_contents = Some(ClipboardContents::Subcanvas(strokes));
 	app.clipboard.write(ClipboardData::Custom);
@@ -226,22 +222,29 @@ fn paste(app: &mut App) {
 				let offset = cursor_virtual_position + app.position;
 
 				if strokes.len() > 0 {
-					app.canvas.perform_operation(Operation::CommitStrokes { strokes: strokes.iter().map(|stroke| Stroke {
-						origin: stroke.origin + offset,
-						is_selected: true,
-						..stroke.clone()
-					}).collect() })
+					app.canvas.perform_operation(Operation::CommitStrokes {
+						strokes: strokes
+							.iter()
+							.map(|stroke| Stroke {
+								origin: stroke.origin + offset,
+								is_selected: true,
+								..stroke.clone()
+							})
+							.collect(),
+					})
 				}
 			}
 		},
 		Some(ClipboardData::Image { dimensions, data }) => {
 			let texture_index = app.renderer.push_texture(dimensions, data);
 
-			app.canvas.perform_operation(Operation::PasteImage { image: Image {
-				texture_index,
-				position: app.position,
-				dimensions: Vex(dimensions.map(|x| Vx(x as f32))),
-			} });
+			app.canvas.perform_operation(Operation::PasteImage {
+				image: Image {
+					texture_index,
+					position: app.position,
+					dimensions: Vex(dimensions.map(|x| Vx(x as f32))),
+				},
+			});
 		},
 		_ => {},
 	}
@@ -255,10 +258,13 @@ fn select_none(app: &mut App) {
 	app.canvas.select_all(false);
 }
 
-fn recolor_selection(app: &mut App) {	
+fn recolor_selection(app: &mut App) {
 	let selected_indices = app.canvas.strokes().iter().enumerate().filter_map(|(index, stroke)| if stroke.is_selected { Some(index) } else { None }).collect::<Vec<_>>();
 
 	if selected_indices.len() > 0 {
-		app.canvas.perform_operation(Operation::RecolorStrokes { indices: selected_indices, new_color: hsv_to_srgba8(app.current_color) });
+		app.canvas.perform_operation(Operation::RecolorStrokes {
+			indices: selected_indices,
+			new_color: hsv_to_srgba8(app.current_color),
+		});
 	}
 }
