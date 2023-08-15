@@ -40,7 +40,7 @@ pub enum RenderCommand {
 	Card(Range<u32>),
 	ColorRing(Range<u32>),
 	ColorTrigon(Range<u32>),
-	Texture(usize),
+	Texture(Range<u32>, usize),
 }
 
 // This struct stores the data of each vertex to be rendered.
@@ -390,13 +390,14 @@ impl Renderer {
 				},
 				DrawCommand::Texture { index, position, dimensions } => {
 					if let Some(texture) = self.textures.get(index) {
+						let instance_start = canvas_image_instances.len() as u32;
 						canvas_image_instances.push(CanvasImageInstance {
 							position: position.0.map(|Vx(x)| x),
 							dimensions: dimensions.0.map(|Vx(x)| x),
 							sprite_position: [0.; 2],
 							sprite_dimensions: [texture.texture_size.width as f32, texture.texture_size.height as f32],
 						});
-						render_commands.push(RenderCommand::Texture(index));
+						render_commands.push(RenderCommand::Texture(instance_start..instance_start + 1, index));
 					}
 				},
 			}
@@ -444,9 +445,9 @@ impl Renderer {
 				RenderCommand::Card(instance_range) => self.card_renderer.render(&mut render_pass, instance_range),
 				RenderCommand::ColorRing(instance_range) => self.color_ring_renderer.render(&mut render_pass, instance_range),
 				RenderCommand::ColorTrigon(instance_range) => self.color_trigon_renderer.render(&mut render_pass, instance_range),
-				RenderCommand::Texture(index) => {
+				RenderCommand::Texture(instance_range, index) => {
 					self.textures[index].activate(&mut render_pass, 1);
-					self.canvas_image_renderer.render(&mut render_pass, index as u32..index as u32 + 1);
+					self.canvas_image_renderer.render(&mut render_pass, instance_range);
 				},
 			}
 		}
