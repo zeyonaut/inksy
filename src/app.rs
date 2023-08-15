@@ -28,7 +28,7 @@ use crate::{
 	},
 	pixel::{Lx, Px, Scale, Vex, Vx, Zero, Zoom},
 	render::{DrawCommand, Renderer},
-	stroke::{Canvas, Stroke},
+	stroke::{Canvas, Operation, Stroke},
 	tools::*,
 	utility::hsv_to_srgba8,
 };
@@ -398,7 +398,9 @@ impl App {
 						current_stroke.add_point(offset, self.pressure.map_or(1., |pressure| (pressure / 32767.) as f32))
 					}
 				} else {
-					self.canvas.strokes.extend(current_stroke.take());
+					if let Some(stroke) = current_stroke.take() {
+						self.canvas.perform_operation(Operation::CommitStrokes { strokes: vec![stroke] });
+					}
 				}
 			},
 			Tool::Select { origin } => {
@@ -516,9 +518,9 @@ impl App {
 					if let Some(origin) = origin.take() {
 						let selection_offset = self.position + cursor_virtual_position - origin;
 
-						for stroke in self.canvas.strokes.iter_mut().filter(|x| x.is_selected) {
-							stroke.origin = stroke.origin + selection_offset;
-						}
+						let selected_indices = self.canvas.strokes().iter().enumerate().filter_map(|(index, stroke)| if stroke.is_selected { Some(index) } else { None }).collect();
+
+						self.canvas.perform_operation(Operation::TranslateStrokes { indices: selected_indices, vector: selection_offset });
 					}
 				}
 			},

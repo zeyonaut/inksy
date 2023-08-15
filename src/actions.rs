@@ -15,7 +15,7 @@ use crate::{
 		Key,
 	},
 	pixel::{Px, Vex, Vx},
-	stroke::{Image, Stroke},
+	stroke::{Operation, Image, Stroke},
 	tools::TransientModeSwitch,
 	utility::hsv_to_srgba8,
 };
@@ -38,6 +38,7 @@ pub fn default_keymap() -> Keymap {
 	keymap.insert(NONE, S, false, trigger(choose_select_tool));
 	keymap.insert(NONE, T, false, trigger(choose_move_tool));
 	keymap.insert(NONE, Z, true, trigger(undo));
+	keymap.insert(LShift, Z, true, trigger(redo));
 	keymap.insert(NONE, Escape, false, trigger(discard_draft));
 
 	keymap.insert(NONE, Space, false, discovery(hold_pan_tool, release_pan_tool));
@@ -113,7 +114,9 @@ fn release_color_picker_tool(app: &mut App) {
 }
 
 fn delete_selected_items(app: &mut App) {
-	for _ in app.canvas.strokes.extract_if(|x| x.is_selected) {}
+	let selected_indices = app.canvas.strokes().iter().enumerate().filter_map(|(index, stroke)| if stroke.is_selected { Some(index) } else { None }).collect();
+
+	app.canvas.perform_operation(Operation::DeleteStrokes { monotone_indices: selected_indices });
 }
 
 fn toggle_fullscreen(app: &mut App) {
@@ -133,7 +136,15 @@ fn undo(app: &mut App) {
 	if app.mode_stack.is_drafting() {
 		app.mode_stack.discard_draft();
 	} else {
-		app.canvas.strokes.pop();
+		app.canvas.undo();
+	}
+}
+
+fn redo(app: &mut App) {
+	if app.mode_stack.is_drafting() {
+		app.mode_stack.discard_draft();
+	} else {
+		app.canvas.redo();
 	}
 }
 
@@ -141,21 +152,30 @@ fn cut(app: &mut App) {
 	let semidimensions = Vex([app.renderer.width as f32 / 2., app.renderer.height as f32 / 2.].map(Px)).s(app.scale).z(app.zoom);
 	let cursor_virtual_position = (app.cursor_physical_position.s(app.scale).z(app.zoom) - semidimensions).rotate(-app.tilt);
 	let offset = cursor_virtual_position + app.position;
-	app.clipboard_contents = Some(ClipboardContents::Subcanvas(
-		app.canvas
-			.strokes
-			.extract_if(|x| {
-				if x.is_selected {
-					x.origin = x.origin - offset;
-					x.is_selected = false;
-					true
-				} else {
-					false
-				}
-			})
-			.collect(),
-	));
 
+	let (indices, strokes): (Vec<_>, Vec<_>) = app
+		.canvas
+		.strokes()
+		.iter()
+		.enumerate()
+		.filter_map(|(index, stroke)| {
+			if stroke.is_selected {
+				Some((
+					index,
+					Stroke {
+						origin: stroke.origin - offset,
+						is_selected: true,
+						..stroke.clone()
+					},
+				))
+			} else {
+				None
+			}
+		})
+		.unzip();
+	app.canvas.perform_operation(Operation::DeleteStrokes { monotone_indices: indices });
+
+	app.clipboard_contents = Some(ClipboardContents::Subcanvas(strokes));
 	app.clipboard.write(ClipboardData::Custom);
 }
 
@@ -163,21 +183,29 @@ fn copy(app: &mut App) {
 	let semidimensions = Vex([app.renderer.width as f32 / 2., app.renderer.height as f32 / 2.].map(Px)).s(app.scale).z(app.zoom);
 	let cursor_virtual_position = (app.cursor_physical_position.s(app.scale).z(app.zoom) - semidimensions).rotate(-app.tilt);
 	let offset = cursor_virtual_position + app.position;
-	app.clipboard_contents = Some(ClipboardContents::Subcanvas(
-		app.canvas
-			.strokes
-			.iter()
-			.filter(|x| x.is_selected)
-			.map(|stroke| Stroke {
-				origin: stroke.origin - offset,
-				color: stroke.color,
-				points: stroke.points.clone(),
-				is_selected: false,
-				max_pressure: stroke.max_pressure,
-			})
-			.collect::<Vec<_>>(),
-	));
+	
+	let (indices, strokes): (Vec<_>, Vec<_>) = app
+		.canvas
+		.strokes()
+		.iter()
+		.enumerate()
+		.filter_map(|(index, stroke)| {
+			if stroke.is_selected {
+				Some((
+					index,
+					Stroke {
+						origin: stroke.origin - offset,
+						is_selected: true,
+						..stroke.clone()
+					},
+				))
+			} else {
+				None
+			}
+		})
+		.unzip();
 
+	app.clipboard_contents = Some(ClipboardContents::Subcanvas(strokes));
 	app.clipboard.write(ClipboardData::Custom);
 }
 
@@ -187,46 +215,41 @@ fn paste(app: &mut App) {
 			if let Some(ClipboardContents::Subcanvas(strokes)) = app.clipboard_contents.as_ref() {
 				let semidimensions = Vex([app.renderer.width as f32 / 2., app.renderer.height as f32 / 2.].map(Px)).s(app.scale).z(app.zoom);
 				let cursor_virtual_position = (app.cursor_physical_position.s(app.scale).z(app.zoom) - semidimensions).rotate(-app.tilt);
-				for stroke in app.canvas.strokes.iter_mut() {
-					stroke.is_selected = false;
-				}
+
+				app.canvas.select_all(false);
+
 				let offset = cursor_virtual_position + app.position;
-				app.canvas.strokes.extend(strokes.iter().map(|stroke| Stroke {
+
+				app.canvas.perform_operation(Operation::CommitStrokes { strokes: strokes.iter().map(|stroke| Stroke {
 					origin: stroke.origin + offset,
-					color: stroke.color,
-					points: stroke.points.clone(),
 					is_selected: true,
-					max_pressure: stroke.max_pressure,
-				}));
+					..stroke.clone()
+				}).collect() })
 			}
 		},
 		Some(ClipboardData::Image { dimensions, data }) => {
 			let texture_index = app.renderer.push_texture(dimensions, data);
 
-			app.canvas.images.push(Image {
+			app.canvas.perform_operation(Operation::PasteImage { image: Image {
 				texture_index,
 				position: app.position,
 				dimensions: Vex(dimensions.map(|x| Vx(x as f32))),
-			});
+			} });
 		},
 		_ => {},
 	}
 }
 
 fn select_all(app: &mut App) {
-	for stroke in app.canvas.strokes.iter_mut() {
-		stroke.is_selected = true;
-	}
+	app.canvas.select_all(true);
 }
 
 fn select_none(app: &mut App) {
-	for stroke in app.canvas.strokes.iter_mut() {
-		stroke.is_selected = false;
-	}
+	app.canvas.select_all(false);
 }
 
-fn recolor_selection(app: &mut App) {
-	for stroke in app.canvas.strokes.iter_mut().filter(|stroke| stroke.is_selected) {
-		stroke.color = hsv_to_srgba8(app.current_color);
-	}
+fn recolor_selection(app: &mut App) {	
+	let selected_indices = app.canvas.strokes().iter().enumerate().filter_map(|(index, stroke)| if stroke.is_selected { Some(index) } else { None }).collect();
+
+	app.canvas.perform_operation(Operation::RecolorStrokes { indices: selected_indices, new_color: hsv_to_srgba8(app.current_color) });
 }

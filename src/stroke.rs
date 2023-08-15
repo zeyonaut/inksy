@@ -62,14 +62,150 @@ impl Stroke {
 	}
 }
 
+enum Retraction {
+	CommitStrokes(usize),
+	PasteImage,
+	DeleteStrokes { antitone_index_stroke_pairs: Vec<(usize, Stroke)> },
+	RecolorStrokes { index_color_pairs: Vec<(usize, [u8; 4])>, new_color: [u8; 4] },
+	TranslateStrokes { indices: Vec<usize>, vector: Vex<2, Vx> },
+}
+
+pub enum Operation {
+	CommitStrokes { strokes: Vec<Stroke> },
+	PasteImage { image: Image },
+	DeleteStrokes { monotone_indices: Vec<usize> },
+	RecolorStrokes { indices: Vec<usize>, new_color: [u8; 4] },
+	TranslateStrokes { indices: Vec<usize>, vector: Vex<2, Vx> },
+}
+
 pub struct Canvas {
-	pub images: Vec<Image>,
-	pub strokes: Vec<Stroke>,
+	images: Vec<Image>,
+	strokes: Vec<Stroke>,
+	retractions: Vec<Retraction>,
+	operations: Vec<Operation>,
 }
 
 impl Canvas {
 	pub fn new() -> Self {
-		Self { images: Vec::new(), strokes: Vec::new() }
+		Self {
+			images: Vec::new(),
+			strokes: Vec::new(),
+			retractions: Vec::new(),
+			operations: Vec::new(),
+		}
+	}
+
+	pub fn strokes(&self) -> &[Stroke] {
+		self.strokes.as_ref()
+	}
+
+	pub fn redo(&mut self) {
+		if let Some(operation) = self.operations.pop() {
+			use Operation::*;
+			self.retractions.push(match operation {
+				CommitStrokes { mut strokes } => {
+					let length = strokes.len();
+					self.strokes.append(&mut strokes);
+
+					Retraction::CommitStrokes(length)
+				},
+				PasteImage { image } => {
+					self.images.push(image);
+
+					Retraction::PasteImage
+				},
+				DeleteStrokes { monotone_indices } => {
+					let mut antitone_index_stroke_pairs = Vec::with_capacity(monotone_indices.len());
+
+					for index in monotone_indices.iter().rev().copied() {
+						debug_assert!(index < self.strokes.len());
+						let stroke = self.strokes.remove(index);
+						antitone_index_stroke_pairs.push((index, stroke));
+					}
+
+					Retraction::DeleteStrokes { antitone_index_stroke_pairs }
+				},
+				RecolorStrokes { indices, new_color } => {
+					let mut index_color_pairs = Vec::with_capacity(indices.len());
+
+					for index in indices {
+						if let Some(stroke) = self.strokes.get_mut(index) {
+							index_color_pairs.push((index, stroke.color));
+							stroke.color = new_color;
+						}
+					}
+
+					Retraction::RecolorStrokes { index_color_pairs, new_color }
+				},
+				TranslateStrokes { indices, vector } => {
+					for index in indices.iter().copied() {
+						if let Some(stroke) = self.strokes.get_mut(index) {
+							stroke.origin = stroke.origin + vector;
+						}
+					}
+
+					Retraction::TranslateStrokes { indices, vector }
+				},
+			});
+		}
+	}
+
+	pub fn undo(&mut self) {
+		if let Some(operation) = self.retractions.pop() {
+			use Retraction::*;
+			self.operations.push(match operation {
+				CommitStrokes(length) => {
+					let mut strokes = Vec::with_capacity(length);
+
+					debug_assert!(length <= self.strokes.len());
+					for i in 0..length {
+						strokes.push(self.strokes.pop().unwrap());
+					}
+
+					Operation::CommitStrokes { strokes }
+				},
+				PasteImage => Operation::PasteImage { image: self.images.pop().unwrap() },
+				DeleteStrokes { antitone_index_stroke_pairs } => {
+					let mut monotone_indices = Vec::with_capacity(antitone_index_stroke_pairs.len());
+
+					for (index, stroke) in antitone_index_stroke_pairs.into_iter().rev() {
+						debug_assert!(index <= self.strokes.len());
+						self.strokes.insert(index, stroke);
+						monotone_indices.push(index);
+					}
+
+					Operation::DeleteStrokes { monotone_indices }
+				},
+				RecolorStrokes { index_color_pairs, new_color } => {
+					let mut indices = Vec::with_capacity(index_color_pairs.len());
+
+					for (index, old_color) in index_color_pairs.into_iter() {
+						if let Some(stroke) = self.strokes.get_mut(index) {
+							stroke.color = old_color;
+						}
+
+						indices.push(index);
+					}
+
+					Operation::RecolorStrokes { indices, new_color }
+				},
+				TranslateStrokes { indices, vector } => {
+					for index in indices.iter().copied() {
+						if let Some(stroke) = self.strokes.get_mut(index) {
+							stroke.origin = stroke.origin - vector;
+						}
+					}
+
+					Operation::TranslateStrokes { indices, vector }
+				},
+			});
+		}
+	}
+
+	pub fn perform_operation(&mut self, operation: Operation) {
+		self.operations.clear();
+		self.operations.push(operation);
+		self.redo();
 	}
 
 	pub fn select(&mut self, min: Vex<2, Vx>, max: Vex<2, Vx>, tilt: f32, screen_center: Vex<2, Vx>, should_aggregate: bool) {
@@ -92,6 +228,12 @@ impl Canvas {
 				}
 				stroke.is_selected = false;
 			}
+		}
+	}
+
+	pub fn select_all(&mut self, is_selected: bool) {
+		for stroke in self.strokes.iter_mut() {
+			stroke.is_selected = is_selected;
 		}
 	}
 
