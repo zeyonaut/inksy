@@ -15,7 +15,7 @@ use crate::{
 		Key,
 	},
 	pixel::{Px, Vex, Vx},
-	stroke::{Operation, Image, Stroke},
+	canvas::{Operation, Image, Stroke},
 	tools::TransientModeSwitch,
 	utility::hsv_to_srgba8,
 };

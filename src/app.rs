@@ -28,7 +28,7 @@ use crate::{
 	},
 	pixel::{Lx, Px, Scale, Vex, Vx, Zero, Zoom},
 	render::{DrawCommand, Renderer},
-	stroke::{Canvas, Operation, Stroke},
+	canvas::{Canvas, Operation, Stroke},
 	tools::*,
 	utility::hsv_to_srgba8,
 };

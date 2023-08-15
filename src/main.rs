@@ -19,7 +19,7 @@ mod input;
 mod pixel;
 #[path = "render/_.rs"]
 mod render;
-mod stroke;
+mod canvas;
 mod tools;
 mod utility;
 #[cfg(target_os = "windows")]
