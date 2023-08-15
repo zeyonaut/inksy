@@ -5,13 +5,9 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-use std::{
-	io::Cursor,
-	time::{Duration, Instant},
-};
+use std::time::{Duration, Instant};
 
 use fast_srgb8::srgb8_to_f32;
-use image::io::Reader as ImageReader;
 use winit::{
 	dpi::{PhysicalPosition, PhysicalSize},
 	event::*,
@@ -44,8 +40,6 @@ const HOLE_RADIUS: Lx = Lx(80.);
 const RING_WIDTH: Lx = Lx(28.);
 const OUTLINE_WIDTH: Lx = Lx(2.);
 const SATURATION_VALUE_WINDOW_DIAMETER: Lx = Lx(8.);
-
-const LOGO_64: &[u8] = include_bytes!("../res/logo_64.png").as_slice();
 
 pub enum ClipboardContents {
 	Subcanvas(Vec<Stroke>),
@@ -85,11 +79,11 @@ impl App {
 		let window = WindowBuilder::new().with_title("Inkslate").with_visible(false).build(event_loop).unwrap();
 
 		// Set the icon (on Windows).
-		let mut image_reader = ImageReader::new(Cursor::new(LOGO_64));
-		image_reader.set_format(image::ImageFormat::Png);
-		let image = image_reader.decode().unwrap();
-		let icon = winit::window::Icon::from_rgba(image.into_bytes(), 64, 64).unwrap();
-		window.set_window_icon(Some(icon));
+		#[cfg(target_os = "windows")]
+		{
+			use winit::platform::windows::WindowExtWindows;
+			crate::windows::set_window_icon(window.hwnd());
+		}
 
 		// Resize the window to a reasonable size.
 		let monitor_size = window.current_monitor().unwrap().size();

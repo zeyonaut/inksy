@@ -20,7 +20,6 @@ bitflags = "2.3.3"
 fast-srgb8 = "1.0"
 enumset = "1.1.2"
 derive_more = "0.99.17"
-image = "0.24.7"
 clipboard-win = "4.5.0"
 png = "0.17.9"
 
@@ -28,7 +27,7 @@ png = "0.17.9"
 embed-resource = "2.2.0"
 
 [target.'cfg(windows)'.dependencies]
-windows-sys = "0.48"
+windows-sys = {version = "0.48", default-features = false, features = ["Win32_UI_WindowsAndMessaging", "Win32_Foundation"]}
 libloading = "0.8.0"
 clipboard-win = "4.5.0"
 

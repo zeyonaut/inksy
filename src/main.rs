@@ -22,6 +22,8 @@ mod render;
 mod stroke;
 mod tools;
 mod utility;
+#[cfg(target_os = "windows")]
+mod windows;
 
 use app::App;
 use winit::event_loop::EventLoopBuilder;
