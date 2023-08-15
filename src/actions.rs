@@ -114,9 +114,11 @@ fn release_color_picker_tool(app: &mut App) {
 }
 
 fn delete_selected_items(app: &mut App) {
-	let selected_indices = app.canvas.strokes().iter().enumerate().filter_map(|(index, stroke)| if stroke.is_selected { Some(index) } else { None }).collect();
+	let selected_indices = app.canvas.strokes().iter().enumerate().filter_map(|(index, stroke)| if stroke.is_selected { Some(index) } else { None }).collect::<Vec<_>>();
 
-	app.canvas.perform_operation(Operation::DeleteStrokes { monotone_indices: selected_indices });
+	if selected_indices.len() > 0 {
+		app.canvas.perform_operation(Operation::DeleteStrokes { monotone_indices: selected_indices });
+	}
 }
 
 fn toggle_fullscreen(app: &mut App) {
@@ -173,7 +175,10 @@ fn cut(app: &mut App) {
 			}
 		})
 		.unzip();
-	app.canvas.perform_operation(Operation::DeleteStrokes { monotone_indices: indices });
+
+	if indices.len() > 0 {
+		app.canvas.perform_operation(Operation::DeleteStrokes { monotone_indices: indices });
+	}
 
 	app.clipboard_contents = Some(ClipboardContents::Subcanvas(strokes));
 	app.clipboard.write(ClipboardData::Custom);
@@ -220,11 +225,13 @@ fn paste(app: &mut App) {
 
 				let offset = cursor_virtual_position + app.position;
 
-				app.canvas.perform_operation(Operation::CommitStrokes { strokes: strokes.iter().map(|stroke| Stroke {
-					origin: stroke.origin + offset,
-					is_selected: true,
-					..stroke.clone()
-				}).collect() })
+				if strokes.len() > 0 {
+					app.canvas.perform_operation(Operation::CommitStrokes { strokes: strokes.iter().map(|stroke| Stroke {
+						origin: stroke.origin + offset,
+						is_selected: true,
+						..stroke.clone()
+					}).collect() })
+				}
 			}
 		},
 		Some(ClipboardData::Image { dimensions, data }) => {
@@ -249,7 +256,9 @@ fn select_none(app: &mut App) {
 }
 
 fn recolor_selection(app: &mut App) {	
-	let selected_indices = app.canvas.strokes().iter().enumerate().filter_map(|(index, stroke)| if stroke.is_selected { Some(index) } else { None }).collect();
+	let selected_indices = app.canvas.strokes().iter().enumerate().filter_map(|(index, stroke)| if stroke.is_selected { Some(index) } else { None }).collect::<Vec<_>>();
 
-	app.canvas.perform_operation(Operation::RecolorStrokes { indices: selected_indices, new_color: hsv_to_srgba8(app.current_color) });
+	if selected_indices.len() > 0 {
+		app.canvas.perform_operation(Operation::RecolorStrokes { indices: selected_indices, new_color: hsv_to_srgba8(app.current_color) });
+	}
 }

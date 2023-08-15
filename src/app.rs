@@ -518,9 +518,11 @@ impl App {
 					if let Some(origin) = origin.take() {
 						let selection_offset = self.position + cursor_virtual_position - origin;
 
-						let selected_indices = self.canvas.strokes().iter().enumerate().filter_map(|(index, stroke)| if stroke.is_selected { Some(index) } else { None }).collect();
+						let selected_indices = self.canvas.strokes().iter().enumerate().filter_map(|(index, stroke)| if stroke.is_selected { Some(index) } else { None }).collect::<Vec<_>>();
 
-						self.canvas.perform_operation(Operation::TranslateStrokes { indices: selected_indices, vector: selection_offset });
+						if selected_indices.len() > 0 {
+							self.canvas.perform_operation(Operation::TranslateStrokes { indices: selected_indices, vector: selection_offset });
+						}
 					}
 				}
 			},
