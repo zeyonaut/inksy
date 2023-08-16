@@ -8,7 +8,7 @@ SPDX-License-Identifier: CC0-1.0
 <img src="res/logo_1024.png" width=192 height=192/>
 <br>
   
-# Inkslate
+# Inksy
 
 An infinite scratchpad for effortless chirography.
 

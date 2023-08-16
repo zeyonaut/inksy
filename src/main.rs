@@ -28,6 +28,9 @@ mod windows;
 use app::App;
 use winit::event_loop::EventLoopBuilder;
 
+pub const APP_NAME_CAPITALIZED: &str = "Inksy";
+pub const APP_NAME_LOWERCASE: &str = "inksy";
+
 // Program entry point.
 fn main() {
 	// Set up the event logger.

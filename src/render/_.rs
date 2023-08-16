@@ -11,7 +11,7 @@ mod texture;
 mod uniform_buffer;
 mod vertex_renderer;
 
-use std::ops::Range;
+use std::{ops::Range, sync::Arc};
 
 use fast_srgb8::srgb8_to_f32;
 use pollster::FutureExt;
@@ -135,6 +135,11 @@ pub struct Renderer {
 	viewport_buffer: UniformBuffer<ViewportUniform>,
 	texture_bind_group_layout: wgpu::BindGroupLayout,
 	textures: Vec<Texture>,
+	text_renderer: glyphon::TextRenderer,
+	font_system: glyphon::FontSystem,
+	text_atlas: glyphon::TextAtlas,
+	buffer: glyphon::Buffer,
+	swash_cache: glyphon::SwashCache,
 	trigon_renderer: VertexRenderer<Vertex>,
 	canvas_image_renderer: InstanceRenderer<CanvasImageInstance>,
 	card_renderer: InstanceRenderer<CardInstance>,
@@ -197,7 +202,19 @@ impl Renderer {
 		};
 		surface.configure(&device, &config);
 
-		//let atlas = DynamicTextureAtlas::new(&device);
+		let mut font_system = glyphon::FontSystem::new_with_fonts([glyphon::fontdb::Source::Binary(Arc::new(include_bytes!("../../ext/dejavu-sans-2.37/DejaVuSans.ttf").as_slice()))].into_iter());
+		font_system.db_mut().set_sans_serif_family("DejaVu Sans");
+		let swash_cache = glyphon::SwashCache::new();
+		let mut text_atlas = glyphon::TextAtlas::new(&device, &queue, texture_format);
+		let text_renderer = glyphon::TextRenderer::new(&mut text_atlas, &device, wgpu::MultisampleState::default(), None);
+		let mut buffer = glyphon::Buffer::new(&mut font_system, glyphon::Metrics::new(12., 12.));
+		// Set the text, and resize the buffer to fit it perfectly.
+		buffer.set_text(&mut font_system, "Draw something!", glyphon::Attrs::new().stretch(glyphon::Stretch::Condensed), glyphon::Shaping::Basic);
+		buffer.set_wrap(&mut font_system, glyphon::Wrap::None);
+		let w = buffer.line_layout(&mut font_system, 0).unwrap().iter().fold(0., |a, x| a + x.w);
+		buffer.set_size(&mut font_system, w, 15.);
+		buffer.shape_until(&mut font_system, 1);
+
 		let texture_bind_group_layout = Texture::bind_group_layout(&device);
 
 		let multisample_texture = if adapter.get_texture_format_features(texture_format).flags.sample_count_supported(4) && SHOULD_MULTISAMPLE {
@@ -259,6 +276,11 @@ impl Renderer {
 			viewport_buffer,
 			texture_bind_group_layout,
 			textures: vec![],
+			text_renderer,
+			font_system,
+			text_atlas,
+			buffer,
+			swash_cache,
 			trigon_renderer,
 			canvas_image_renderer,
 			card_renderer,
@@ -403,6 +425,8 @@ impl Renderer {
 			}
 		}
 
+		let should_render_test_text = strokes_indices.is_empty() && canvas_image_instances.is_empty();
+
 		self.canvas_image_renderer.prepare(&self.device, &self.queue, canvas_image_instances);
 		self.trigon_renderer.prepare(&self.device, &self.queue, strokes_vertices, strokes_indices);
 		self.card_renderer.prepare(&self.device, &self.queue, card_instances);
@@ -411,6 +435,39 @@ impl Renderer {
 
 		for texture in self.textures.iter_mut() {
 			texture.prepare(&self.queue);
+		}
+
+		// Display the text in the center of the screen.
+		let buffer_size = self.buffer.size();
+
+		// TODO: Handle error.
+		if should_render_test_text {
+			self.text_renderer
+				.prepare(
+					&self.device,
+					&self.queue,
+					&mut self.font_system,
+					&mut self.text_atlas,
+					glyphon::Resolution {
+						width: self.config.width,
+						height: self.config.height,
+					},
+					[glyphon::TextArea {
+						buffer: &self.buffer,
+						left: (self.config.width as f32 - buffer_size.0 * self.scale_factor) / 2.,
+						top: (self.config.height as f32 - buffer_size.1 * self.scale_factor) / 2.,
+						scale: self.scale_factor,
+						bounds: glyphon::TextBounds {
+							left: 0,
+							top: 0,
+							right: self.config.width as i32,
+							bottom: self.config.height as i32,
+						},
+						default_color: glyphon::Color::rgb(0xff, 0xff, 0xff),
+					}],
+					&mut self.swash_cache,
+				)
+				.unwrap();
 		}
 
 		// Set up the surface texture we will later render to.
@@ -436,6 +493,11 @@ impl Renderer {
 			})],
 			depth_stencil_attachment: None,
 		});
+
+		// TODO: Handle error?
+		if should_render_test_text {
+			self.text_renderer.render(&self.text_atlas, &mut render_pass).unwrap();
+		}
 
 		self.viewport_buffer.activate(&mut render_pass, 0);
 

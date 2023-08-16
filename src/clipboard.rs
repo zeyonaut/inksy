@@ -12,7 +12,7 @@ pub struct Clipboard {
 	png_format: NonZeroU32,
 }
 
-const CLIPBOARD_FORMAT_NAME: &str = "inkslate";
+const CLIPBOARD_FORMAT_NAME: &str = crate::APP_NAME_LOWERCASE;
 
 pub enum ClipboardData {
 	Custom,

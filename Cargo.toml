@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: CC0-1.0
 
 [package]
-name = "inkslate"
+name = "inksy"
 version = "0.1.0"
 edition = "2021"
 license = "MPL-2.0"
@@ -15,13 +15,14 @@ log = "0.4"
 wgpu = {version = "0.16", features = ["vulkan-portability"]}
 raw-window-handle = "0.5"
 pollster = "0.3"
-bytemuck = { version = "1.12.1", features = [ "derive", "min_const_generics" ] }
-bitflags = "2.3.3"
+bytemuck = { version = "1.13", features = [ "derive", "min_const_generics" ] }
+bitflags = "2.4"
 fast-srgb8 = "1.0"
 enumset = "1.1.2"
 derive_more = "0.99.17"
-clipboard-win = "4.5.0"
+clipboard-win = "4.5"
 png = "0.17.9"
+glyphon = "0.3"
 
 [target.'cfg(windows)'.build-dependencies]
 embed-resource = "2.2.0"

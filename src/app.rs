@@ -76,7 +76,7 @@ impl App {
 		let keymap = default_keymap();
 
 		// Create a window.
-		let window = WindowBuilder::new().with_title("Inkslate").with_visible(false).build(event_loop).unwrap();
+		let window = WindowBuilder::new().with_title(crate::APP_NAME_CAPITALIZED).with_visible(false).build(event_loop).unwrap();
 
 		// Set the icon (on Windows).
 		#[cfg(target_os = "windows")]
