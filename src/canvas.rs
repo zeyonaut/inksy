@@ -275,7 +275,7 @@ impl Canvas {
 					let stroke_index = u32::try_from(vertices.len()).unwrap();
 					let heptagonal_vertices = heptagonal_vertices().map(|v| stroke.origin + stroke_offset + point.position + v * (stroke.max_pressure * STROKE_RADIUS + BORDER_RADIUS));
 					vertices.extend(heptagonal_vertices.map(|position| Vertex {
-						position: [position[0], position[1], Vx(0.)],
+						position: [position[0], position[1]],
 						color: BORDER_COLOR.map(srgb8_to_f32),
 					}));
 					indices.extend([0, 1, 2, 0, 2, 3, 0, 3, 4, 0, 4, 5, 0, 5, 6, 0, 6, 7, 0, 7, 1].map(|n| stroke_index + n));
@@ -283,7 +283,7 @@ impl Canvas {
 				let stroke_index = u32::try_from(vertices.len()).unwrap();
 				let heptagonal_vertices = heptagonal_vertices().map(|v| stroke.origin + stroke_offset + point.position + v * stroke.max_pressure * STROKE_RADIUS);
 				vertices.extend(heptagonal_vertices.map(|position| Vertex {
-					position: [position[0], position[1], Vx(0.)],
+					position: [position[0], position[1]],
 					color: stroke.color.map(srgb8_to_f32),
 				}));
 				indices.extend([0, 1, 2, 0, 2, 3, 0, 3, 4, 0, 4, 5, 0, 5, 6, 0, 6, 7, 0, 7, 1].map(|n| stroke_index + n));
@@ -330,7 +330,7 @@ impl Canvas {
 					}
 
 					vertices.extend(positions.into_iter().map(|position| Vertex {
-						position: [position[0], position[1], Vx(0.)],
+						position: [position[0], position[1]],
 						color: BORDER_COLOR.map(srgb8_to_f32),
 					}));
 				}
@@ -358,7 +358,7 @@ impl Canvas {
 				}
 
 				vertices.extend(positions.into_iter().map(|position| Vertex {
-					position: [position[0], position[1], Vx(0.)],
+					position: [position[0], position[1]],
 					color: stroke.color.map(srgb8_to_f32),
 				}));
 			}

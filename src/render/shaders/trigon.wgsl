@@ -14,12 +14,12 @@ struct ViewportUniform {
 
 @group(0) @binding(0) var<uniform> viewport: ViewportUniform;
 
-struct VertexInput {
-	@location(0) position: vec3f,
+struct Vertex {
+	@location(0) position: vec2f,
 	@location(1) color: vec4f,
 }
 
-struct VertexOutput {
+struct ClipVertex {
 	@builtin(position) position: vec4f,
 	@location(0) color: vec4f
 }
@@ -29,14 +29,14 @@ fn rotate(v: vec2f, angle: f32) -> vec2f {
 }
 
 @vertex
-fn vs_main(model: VertexInput) -> VertexOutput {
-	var out: VertexOutput;
-	out.position = vec4f(rotate((model.position.xy - viewport.position) * viewport.scale, viewport.tilt) / viewport.size * vec2f(2., -2.), model.position.z, 1.);
-	out.color = model.color;
+fn vs_main(vertex: Vertex) -> ClipVertex {
+	var out: ClipVertex;
+	out.position = vec4f(rotate((vertex.position - viewport.position) * viewport.scale, viewport.tilt) / viewport.size * vec2f(2., -2.), 0., 1.);
+	out.color = vertex.color;
 	return out;
 }
 
 @fragment
-fn fs_main(in: VertexOutput) -> @location(0) vec4f {
+fn fs_main(in: ClipVertex) -> @location(0) vec4f {
 	return in.color;
 }

@@ -47,12 +47,12 @@ pub enum RenderCommand {
 #[repr(C)]
 #[derive(Default, Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct Vertex {
-	pub position: [Vx; 3],
+	pub position: [Vx; 2],
 	pub color: [f32; 4],
 }
 
 impl VertexAttributes<2> for Vertex {
-	const ATTRIBUTES: [wgpu::VertexAttribute; 2] = wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x4];
+	const ATTRIBUTES: [wgpu::VertexAttribute; 2] = wgpu::vertex_attr_array![0 => Float32x2, 1 => Float32x4];
 }
 
 #[repr(C)]
@@ -83,12 +83,11 @@ pub struct CardInstance {
 	pub position: [f32; 2],
 	pub dimensions: [f32; 2],
 	pub color: [f32; 4],
-	pub depth: f32,
 	pub radius: f32,
 }
 
-impl InstanceAttributes<5> for CardInstance {
-	const ATTRIBUTES: [wgpu::VertexAttribute; 5] = wgpu::vertex_attr_array![0 => Float32x2, 1 => Float32x2, 2 => Float32x4, 3 => Float32, 4 => Float32];
+impl InstanceAttributes<4> for CardInstance {
+	const ATTRIBUTES: [wgpu::VertexAttribute; 4] = wgpu::vertex_attr_array![0 => Float32x2, 1 => Float32x2, 2 => Float32x4, 3 => Float32];
 }
 
 #[repr(C)]
@@ -97,12 +96,11 @@ pub struct ColorRingInstance {
 	pub position: [f32; 2],
 	pub radius_major: f32,
 	pub radius_minor: f32,
-	pub depth: f32,
 	pub saturation_value: [f32; 2],
 }
 
-impl InstanceAttributes<5> for ColorRingInstance {
-	const ATTRIBUTES: [wgpu::VertexAttribute; 5] = wgpu::vertex_attr_array![0 => Float32x2, 1 => Float32, 2 => Float32, 3 => Float32, 4 => Float32x2];
+impl InstanceAttributes<4> for ColorRingInstance {
+	const ATTRIBUTES: [wgpu::VertexAttribute; 4] = wgpu::vertex_attr_array![0 => Float32x2, 1 => Float32, 2 => Float32, 3 => Float32x2];
 }
 
 #[repr(C)]
@@ -111,11 +109,10 @@ pub struct ColorTrigonInstance {
 	pub position: [f32; 2],
 	pub radius: f32,
 	pub hue: f32,
-	pub depth: f32,
 }
 
-impl InstanceAttributes<4> for ColorTrigonInstance {
-	const ATTRIBUTES: [wgpu::VertexAttribute; 4] = wgpu::vertex_attr_array![0 => Float32x2, 1 => Float32, 2 => Float32, 3 => Float32];
+impl InstanceAttributes<3> for ColorTrigonInstance {
+	const ATTRIBUTES: [wgpu::VertexAttribute; 3] = wgpu::vertex_attr_array![0 => Float32x2, 1 => Float32, 2 => Float32];
 }
 
 // This struct stores the current state of the WGPU renderer.
@@ -207,12 +204,13 @@ impl Renderer {
 		let swash_cache = glyphon::SwashCache::new();
 		let mut text_atlas = glyphon::TextAtlas::new(&device, &queue, texture_format);
 		let text_renderer = glyphon::TextRenderer::new(&mut text_atlas, &device, wgpu::MultisampleState::default(), None);
-		let mut buffer = glyphon::Buffer::new(&mut font_system, glyphon::Metrics::new(12., 12.));
+		let font_size = 13.;
+		let mut buffer = glyphon::Buffer::new(&mut font_system, glyphon::Metrics::new(font_size, font_size));
 		// Set the text, and resize the buffer to fit it perfectly.
-		buffer.set_text(&mut font_system, "Draw something!", glyphon::Attrs::new().stretch(glyphon::Stretch::Condensed), glyphon::Shaping::Basic);
+		buffer.set_text(&mut font_system, "(Draw something!)", glyphon::Attrs::new().stretch(glyphon::Stretch::Condensed), glyphon::Shaping::Basic);
 		buffer.set_wrap(&mut font_system, glyphon::Wrap::None);
 		let w = buffer.line_layout(&mut font_system, 0).unwrap().iter().fold(0., |a, x| a + x.w);
-		buffer.set_size(&mut font_system, w, 15.);
+		buffer.set_size(&mut font_system, w, font_size);
 		buffer.shape_until(&mut font_system, 1);
 
 		let texture_bind_group_layout = Texture::bind_group_layout(&device);
@@ -379,7 +377,6 @@ impl Renderer {
 						position: position.0.map(|n| n.0),
 						dimensions: dimensions.0.map(|n| n.0),
 						color: color.map(srgb8_to_f32),
-						depth: 0.,
 						radius: radius.0,
 					});
 					render_commands.push(RenderCommand::Card(instance_start..instance_start + 1));
@@ -396,7 +393,6 @@ impl Renderer {
 						position: position.0.map(|n| n.0),
 						radius_major: (hole_radius + ring_width).0,
 						radius_minor: hole_radius.0,
-						depth: 0.,
 						saturation_value: [hsv[1], hsv[2]],
 					});
 					render_commands.push(RenderCommand::ColorRing(ring_instance_start..ring_instance_start + 1));
@@ -406,7 +402,6 @@ impl Renderer {
 						position: position.map(|n| n + ring_width + hole_radius - trigon_radius).0.map(|n| n.0),
 						radius: trigon_radius.0,
 						hue: hsv[0],
-						depth: 0.,
 					});
 					render_commands.push(RenderCommand::ColorTrigon(trigon_instance_start..trigon_instance_start + 1));
 				},

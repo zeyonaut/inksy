@@ -14,15 +14,14 @@ struct ViewportUniform {
 
 @group(0) @binding(0) var<uniform> viewport: ViewportUniform;
 
-struct VertexInput {
+struct Instance {
 	@location(0) position: vec2f,
 	@location(1) dimensions: vec2f,
 	@location(2) color: vec4f,
-	@location(3) depth: f32,
-	@location(4) radius: f32,
+	@location(3) radius: f32,
 }
 
-struct VertexOutput {
+struct ClipVertex {
 	@builtin(position) position: vec4f,
 	@location(0) sposition: vec2f,
 	@location(1) dimensions: vec2f,
@@ -39,14 +38,14 @@ var<private> vertices: array<vec2f, 4> = array<vec2f, 4>(
 );
 
 @vertex
-fn vs_main(shape: VertexInput, @builtin(vertex_index) index: u32, @builtin(instance_index) instance_index: u32) -> VertexOutput {
-	var out: VertexOutput;
-	let position = shape.position;
-	out.position = vec4f((vertices[index] * (shape.dimensions + 4.) - 2. + position) / viewport.size * vec2f(2., -2.) + vec2f(-1., 1.), shape.depth, 1.);
+fn vs_main(instance: Instance, @builtin(vertex_index) index: u32, @builtin(instance_index) instance_index: u32) -> ClipVertex {
+	var out: ClipVertex;
+	let position = instance.position;
+	out.position = vec4f((vertices[index] * (instance.dimensions + 4.) - 2. + position) / viewport.size * vec2f(2., -2.) + vec2f(-1., 1.), 0., 1.);
 	out.sposition = position;
-	out.dimensions = shape.dimensions;
-	out.color = shape.color;
-	out.radius = shape.radius;
+	out.dimensions = instance.dimensions;
+	out.color = instance.color;
+	out.radius = instance.radius;
 	out.instance_index = instance_index;
 	return out;
 }
@@ -57,7 +56,7 @@ fn blurred_step(edge: f32, value: f32) -> f32 {
 }
 
 @fragment
-fn fs_main(in: VertexOutput) -> @location(0) vec4f {
+fn fs_main(in: ClipVertex) -> @location(0) vec4f {
 	let rect_vertex = vec2(0.5, 0.5) * in.dimensions + vec2(-in.radius);
 	let rect_center = vec2(in.radius) + in.sposition + rect_vertex;
 	let frag_position = in.position.xy - rect_center;

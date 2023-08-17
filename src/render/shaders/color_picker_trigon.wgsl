@@ -14,14 +14,13 @@ struct ViewportUniform {
 
 @group(0) @binding(0) var<uniform> viewport: ViewportUniform;
 
-struct VertexInput {
+struct Instance {
 	@location(0) position: vec2f,
 	@location(1) radius: f32,
 	@location(2) hue: f32,
-	@location(3) depth: f32,
 }
 
-struct VertexOutput {
+struct ClipVertex {
 	@builtin(position) position: vec4f,
 	@location(0) origin: vec2f,
 	@location(1) radius: f32,
@@ -36,13 +35,13 @@ var<private> vertices: array<vec2f, 4> = array<vec2f, 4>(
 );
 
 @vertex
-fn vs_main(shape: VertexInput, @builtin(vertex_index) index: u32) -> VertexOutput {
-	var out: VertexOutput;
-	let position = shape.position;
-	out.position = vec4((vertices[index] * (shape.radius + 4.) - 2. + position) / viewport.size * vec2(2., -2.) + vec2(-1., 1.), shape.depth, 1.);
-	out.origin = position + shape.radius;
-	out.radius = shape.radius;
-	out.hue = shape.hue;
+fn vs_main(instance: Instance, @builtin(vertex_index) index: u32) -> ClipVertex {
+	var out: ClipVertex;
+	let position = instance.position;
+	out.position = vec4((vertices[index] * (instance.radius + 4.) - 2. + position) / viewport.size * vec2(2., -2.) + vec2(-1., 1.), 0., 1.);
+	out.origin = position + instance.radius;
+	out.radius = instance.radius;
+	out.hue = instance.hue;
 	return out;
 }
 
@@ -67,7 +66,7 @@ fn blurred_step(edge: f32, value: f32) -> f32 {
 }
 
 @fragment
-fn fs_main(in: VertexOutput) -> @location(0) vec4f {
+fn fs_main(in: ClipVertex) -> @location(0) vec4f {
 	let vector = in.position.xy - in.origin;
 	let scaled_vector = vector / in.radius;
 	let s = (1. - 2. * scaled_vector.y) / (2. + sqrt(3.) * scaled_vector.x - scaled_vector.y);

@@ -14,15 +14,14 @@ struct ViewportUniform {
 
 @group(0) @binding(0) var<uniform> viewport: ViewportUniform;
 
-struct VertexInput {
+struct Instance {
 	@location(0) position: vec2f,
 	@location(1) radius_major: f32,
 	@location(2) radius_minor: f32,
-	@location(3) depth: f32,
-	@location(4) saturation_value: vec2f,
+	@location(3) saturation_value: vec2f,
 }
 
-struct VertexOutput {
+struct ClipVertex {
 	@builtin(position) position: vec4f,
 	@location(0) center: vec2f,
 	@location(1) radius_major: f32,
@@ -38,14 +37,14 @@ var<private> vertices: array<vec2f, 4> = array<vec2f, 4>(
 );
 
 @vertex
-fn vs_main(shape: VertexInput, @builtin(vertex_index) index: u32) -> VertexOutput {
-	var out: VertexOutput;
-	let position = shape.position;
-	out.position = vec4((vertices[index] * (shape.radius_major + 4.) - 2. + position) / viewport.size * vec2(2., -2.) + vec2(-1., 1.), shape.depth, 1.);
-	out.center = position + shape.radius_major;
-	out.radius_major = shape.radius_major;
-	out.radius_minor = shape.radius_minor;
-	out.saturation_value = shape.saturation_value;
+fn vs_main(instance: Instance, @builtin(vertex_index) index: u32) -> ClipVertex {
+	var out: ClipVertex;
+	let position = instance.position;
+	out.position = vec4((vertices[index] * (instance.radius_major + 4.) - 2. + position) / viewport.size * vec2(2., -2.) + vec2(-1., 1.), 0., 1.);
+	out.center = position + instance.radius_major;
+	out.radius_major = instance.radius_major;
+	out.radius_minor = instance.radius_minor;
+	out.saturation_value = instance.saturation_value;
 	return out;
 }
 
@@ -70,7 +69,7 @@ fn blurred_step(edge: f32, value: f32) -> f32 {
 }
 
 @fragment
-fn fs_main(in: VertexOutput) -> @location(0) vec4f {
+fn fs_main(in: ClipVertex) -> @location(0) vec4f {
 	let vector = in.position.xy - in.center;
 	let distance_from_center = length(vector);
 	let color_hsv = vec3(atan2(vector.y, vector.x) / (2. * PI) + 0.5, in.saturation_value);
