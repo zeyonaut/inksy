@@ -8,7 +8,7 @@
 use enumset::EnumSet;
 
 use crate::{
-	app::{App, ClipboardContents},
+	app::{App, ClipboardContents, PreFullscreenState},
 	canvas::{Image, Operation, Stroke},
 	clipboard::ClipboardData,
 	input::{
@@ -122,15 +122,25 @@ fn delete_selected_items(app: &mut App) {
 }
 
 fn toggle_fullscreen(app: &mut App) {
-	if app.is_fullscreen {
-		app.window.set_fullscreen(None);
-	} else {
-		app.window.set_fullscreen(Some(winit::window::Fullscreen::Borderless(app.window.current_monitor())));
+	// On Windows, we enable fullscreen this way to allow the window to gracefully handle defocusing.
+	#[cfg(target_os = "windows")]
+	{
+		use winit::platform::windows::WindowExtWindows;
+		if let Some(pre_fullscreen_state) = app.pre_fullscreen_state {
+			app.pre_fullscreen_state = None;
+			crate::windows::set_unfullscreen(app.window.hwnd(), pre_fullscreen_state);
+		} else {
+			app.pre_fullscreen_state = Some(if app.window.is_maximized() { PreFullscreenState::Maximized } else { PreFullscreenState::Normal });
+			crate::windows::set_fullscreen(app.window.hwnd());
+		}
 	}
-	app.is_fullscreen = !app.is_fullscreen;
+
+	#[cfg(not(target_os = "windows"))]
+	app.window.set_fullscreen(if app.window.fullscreen().is_some() { None } else { Some(winit::window::Fullscreen::Borderless(None)) });
 }
 
 fn toggle_maximized(app: &mut App) {
+	app.pre_fullscreen_state = None;
 	app.window.set_maximized(!app.window.is_maximized());
 }
 

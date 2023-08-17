@@ -45,6 +45,12 @@ pub enum ClipboardContents {
 	Subcanvas(Vec<Stroke>),
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum PreFullscreenState {
+	Normal,
+	Maximized,
+}
+
 // Current state of our app.
 pub struct App {
 	pub window: winit::window::Window,
@@ -67,7 +73,7 @@ pub struct App {
 	pub keymap: Keymap,
 	pub current_color: [f32; 3],
 	pub clipboard_contents: Option<ClipboardContents>,
-	pub is_fullscreen: bool,
+	pub pre_fullscreen_state: Option<PreFullscreenState>,
 }
 
 impl App {
@@ -135,7 +141,7 @@ impl App {
 			keymap,
 			current_color: [2. / 3., 0.016, 1.],
 			clipboard_contents: None,
-			is_fullscreen: false,
+			pre_fullscreen_state: None,
 		}
 	}
 
@@ -183,13 +189,7 @@ impl App {
 
 					// Resize the window if requested to.
 					WindowEvent::Resized(physical_size) => {
-						let mut size = physical_size.clone();
-						// TODO: This is suboptimal, as it visibly affects the client area. Is there a better way?
-						#[cfg(target_os = "windows")]
-						if self.window.fullscreen().is_some() {
-							size.height += 1;
-						}
-						self.pending_resize = Some(size);
+						self.pending_resize = Some(physical_size.clone());
 						self.should_redraw = true;
 					},
 					WindowEvent::ScaleFactorChanged { scale_factor, new_inner_size } => {
