@@ -9,7 +9,7 @@ use enumset::EnumSet;
 
 use crate::{
 	app::{App, ClipboardContents, PreFullscreenState},
-	canvas::{Image, Operation, Stroke},
+	canvas::{Image, Object, Operation, Stroke},
 	clipboard::ClipboardData,
 	input::{
 		keymap::{Action, Keymap},
@@ -37,6 +37,7 @@ pub fn default_keymap() -> Keymap {
 	keymap.insert(Tab, R, false, trigger(recolor_selection));
 	keymap.insert(NONE, S, false, trigger(choose_select_tool));
 	keymap.insert(NONE, T, false, trigger(choose_move_tool));
+	keymap.insert(NONE, R, false, trigger(choose_rotate_tool));
 	keymap.insert(NONE, Z, true, trigger(undo));
 	keymap.insert(LShift, Z, true, trigger(redo));
 	keymap.insert(NONE, Escape, false, trigger(discard_draft));
@@ -73,6 +74,10 @@ fn choose_select_tool(app: &mut App) {
 
 fn choose_move_tool(app: &mut App) {
 	app.mode_stack.switch_move();
+}
+
+fn choose_rotate_tool(app: &mut App) {
+	app.mode_stack.switch_rotate();
 }
 
 fn hold_pan_tool(app: &mut App) {
@@ -114,9 +119,9 @@ fn release_color_picker_tool(app: &mut App) {
 }
 
 fn delete_selected_items(app: &mut App) {
-	let selected_indices = app.canvas.strokes().iter().enumerate().filter_map(|(index, stroke)| if stroke.is_selected { Some(index) } else { None }).collect::<Vec<_>>();
+	let selected_indices = app.canvas.strokes().iter().enumerate().filter_map(|(index, stroke)| if stroke.object.is_selected { Some(index) } else { None }).collect::<Vec<_>>();
 
-	if selected_indices.len() > 0 {
+	if !selected_indices.is_empty() {
 		app.canvas.perform_operation(Operation::DeleteStrokes { monotone_indices: selected_indices });
 	}
 }
@@ -171,12 +176,12 @@ fn cut(app: &mut App) {
 		.iter()
 		.enumerate()
 		.filter_map(|(index, stroke)| {
-			if stroke.is_selected {
+			if stroke.object.is_selected {
 				Some((
 					index,
-					Stroke {
-						origin: stroke.origin - offset,
-						is_selected: true,
+					Object {
+						object: Stroke { is_selected: true, ..stroke.object.clone() },
+						position: stroke.position - offset,
 						..stroke.clone()
 					},
 				))
@@ -186,7 +191,7 @@ fn cut(app: &mut App) {
 		})
 		.unzip();
 
-	if indices.len() > 0 {
+	if !indices.is_empty() {
 		app.canvas.perform_operation(Operation::DeleteStrokes { monotone_indices: indices });
 	}
 
@@ -204,10 +209,10 @@ fn copy(app: &mut App) {
 		.strokes()
 		.iter()
 		.filter_map(|stroke| {
-			if stroke.is_selected {
-				Some(Stroke {
-					origin: stroke.origin - offset,
-					is_selected: true,
+			if stroke.object.is_selected {
+				Some(Object {
+					object: Stroke { is_selected: true, ..stroke.object.clone() },
+					position: stroke.position - offset,
 					..stroke.clone()
 				})
 			} else {
@@ -231,13 +236,13 @@ fn paste(app: &mut App) {
 
 				let offset = cursor_virtual_position + app.position;
 
-				if strokes.len() > 0 {
+				if !strokes.is_empty() {
 					app.canvas.perform_operation(Operation::CommitStrokes {
 						strokes: strokes
 							.iter()
-							.map(|stroke| Stroke {
-								origin: stroke.origin + offset,
-								is_selected: true,
+							.map(|stroke| Object {
+								object: Stroke { is_selected: true, ..stroke.object.clone() },
+								position: stroke.position + offset,
 								..stroke.clone()
 							})
 							.collect(),
@@ -269,9 +274,9 @@ fn select_none(app: &mut App) {
 }
 
 fn recolor_selection(app: &mut App) {
-	let selected_indices = app.canvas.strokes().iter().enumerate().filter_map(|(index, stroke)| if stroke.is_selected { Some(index) } else { None }).collect::<Vec<_>>();
+	let selected_indices = app.canvas.strokes().iter().enumerate().filter_map(|(index, stroke)| if stroke.object.is_selected { Some(index) } else { None }).collect::<Vec<_>>();
 
-	if selected_indices.len() > 0 {
+	if !selected_indices.is_empty() {
 		app.canvas.perform_operation(Operation::RecolorStrokes {
 			indices: selected_indices,
 			new_color: hsv_to_srgba8(app.current_color),

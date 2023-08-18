@@ -335,16 +335,31 @@ impl<A> Vex<2, A> {
 		let Vex([x, y]) = self;
 		y.into().atan2(x.into())
 	}
+
+	pub fn angle_to<P>(self, other: Vex<2, A>) -> f32
+	where
+		A: Mul<Output = P> + Zero + Clone,
+		P: Add<Output = P> + Sub<Output = P> + Zero + Into<f32>,
+	{
+		self.clone().cross(other.clone()).into().atan2(self.dot(other).into())
+	}
 }
 
-impl<A, B, C> Vex<2, A>
-where
-	A: Clone + Mul<f32, Output = B>,
-	B: Add<B, Output = C> + Sub<B, Output = C>,
-{
-	pub fn rotate(self, angle: f32) -> Vex<2, C> {
+impl<A> Vex<2, A> {
+	pub fn rotate<B, C>(self, angle: f32) -> Vex<2, C>
+	where
+		A: Clone + Mul<f32, Output = B>,
+		B: Add<B, Output = C> + Sub<B, Output = C>,
+	{
 		let Vex([x, y]) = self;
 		Vex([x.clone() * angle.cos() - y.clone() * angle.sin(), x * angle.sin() + y * angle.cos()])
+	}
+
+	pub fn rotate_about(self, center: Self, angle: f32) -> Vex<2, A>
+	where
+		A: Clone + Mul<f32, Output = A> + Add<Output = A> + Sub<Output = A>,
+	{
+		center.clone() + (self.clone() - center).rotate(angle)
 	}
 }
 

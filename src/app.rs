@@ -21,7 +21,7 @@ use crate::input::linux::*;
 use crate::input::wintab::*;
 use crate::{
 	actions::default_keymap,
-	canvas::{Canvas, Operation, Stroke},
+	canvas::{Canvas, Object, Operation, Stroke},
 	clipboard::Clipboard,
 	input::{
 		keymap::{execute_keymap, Keymap},
@@ -42,7 +42,7 @@ const OUTLINE_WIDTH: Lx = Lx(2.);
 const SATURATION_VALUE_WINDOW_DIAMETER: Lx = Lx(8.);
 
 pub enum ClipboardContents {
-	Subcanvas(Vec<Stroke>),
+	Subcanvas(Vec<Object<Stroke>>),
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -245,7 +245,19 @@ impl App {
 		} else {
 			None
 		};
-		self.canvas.bake(&mut draw_commands, self.mode_stack.current_stroke(), selection_offset);
+
+		let selection_angle = if let Tool::Rotate {
+			origin: Some(RotateDraft { center, initial_position }),
+		} = &self.mode_stack.base_mode
+		{
+			let selection_offset = self.position + cursor_virtual_position - center;
+			let angle = initial_position.angle_to(selection_offset);
+			Some((center.clone(), angle))
+		} else {
+			None
+		};
+
+		self.canvas.bake(&mut draw_commands, self.mode_stack.current_stroke(), selection_offset, selection_angle);
 
 		match &self.mode_stack.get() {
 			Tool::Select { origin: Some(origin) } => {
@@ -390,15 +402,20 @@ impl App {
 				if self.input_monitor.active_buttons.contains(Left) {
 					if self.input_monitor.different_buttons.contains(Left) && current_stroke.is_none() {
 						let srgba8 = hsv_to_srgba8(self.current_color);
-						*current_stroke = Some(Stroke::new(self.position, srgba8));
+						*current_stroke = Some(Object {
+							object: Stroke::new(srgba8),
+							position: self.position,
+							orientation: 0.,
+						});
 					}
 
 					if let Some(current_stroke) = current_stroke {
-						let offset = self.position + cursor_virtual_position;
-						current_stroke.add_point(offset, self.pressure.map_or(1., |pressure| (pressure / 32767.) as f32))
+						let offset = self.position + cursor_virtual_position - current_stroke.position;
+						current_stroke.object.add_point(offset, self.pressure.map_or(1., |pressure| (pressure / 32767.) as f32))
 					}
 				} else {
-					if let Some(stroke) = current_stroke.take() {
+					if let Some(mut stroke) = current_stroke.take() {
+						stroke.position = stroke.position + stroke.object.commit();
 						self.canvas.perform_operation(Operation::CommitStrokes { strokes: vec![stroke] });
 					}
 				}
@@ -518,13 +535,50 @@ impl App {
 					if let Some(origin) = origin.take() {
 						let selection_offset = self.position + cursor_virtual_position - origin;
 
-						let selected_indices = self.canvas.strokes().iter().enumerate().filter_map(|(index, stroke)| if stroke.is_selected { Some(index) } else { None }).collect::<Vec<_>>();
+						let selected_indices = self.canvas.strokes().iter().enumerate().filter_map(|(index, stroke)| if stroke.object.is_selected { Some(index) } else { None }).collect::<Vec<_>>();
 
-						if selected_indices.len() > 0 {
+						if !selected_indices.is_empty() {
 							self.canvas.perform_operation(Operation::TranslateStrokes {
 								indices: selected_indices,
 								vector: selection_offset,
 							});
+						}
+					}
+				}
+			},
+			Tool::Rotate { origin } => {
+				if self.is_cursor_relevant {
+					self.window.set_cursor_icon(winit::window::CursorIcon::Move);
+				}
+
+				if self.input_monitor.active_buttons.contains(Left) {
+					if self.input_monitor.different_buttons.contains(Left) && origin.is_none() {
+						let (sum, selected_point_count) = self.canvas.strokes().iter().fold((Vex::ZERO, 0), |(sum, selected_point_count), stroke| {
+							if stroke.object.is_selected {
+								(sum + stroke.position * stroke.object.points.len() as f32, selected_point_count + stroke.object.points.len())
+							} else {
+								(sum, selected_point_count)
+							}
+						});
+
+						let center = if selected_point_count > 0 { sum / selected_point_count as f32 } else { Vex::ZERO };
+
+						*origin = Some({
+							RotateDraft {
+								center,
+								initial_position: self.position + cursor_virtual_position - center,
+							}
+						});
+					}
+				} else {
+					if let Some(RotateDraft { center, initial_position }) = origin.take() {
+						let selection_offset = self.position + cursor_virtual_position - center;
+						let angle = initial_position.angle_to(selection_offset);
+
+						let selected_indices = self.canvas.strokes().iter().enumerate().filter_map(|(index, stroke)| if stroke.object.is_selected { Some(index) } else { None }).collect::<Vec<_>>();
+
+						if !selected_indices.is_empty() {
+							self.canvas.perform_operation(Operation::RotateStrokes { indices: selected_indices, center, angle });
 						}
 					}
 				}
