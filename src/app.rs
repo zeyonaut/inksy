@@ -21,7 +21,7 @@ use crate::input::linux::*;
 use crate::input::wintab::*;
 use crate::{
 	actions::default_keymap,
-	canvas::{Canvas, Object, Operation, Stroke},
+	canvas::{Canvas, IncompleteStroke, Object, Operation, Stroke},
 	clipboard::Clipboard,
 	input::{
 		keymap::{execute_keymap, Keymap},
@@ -257,7 +257,18 @@ impl App {
 			None
 		};
 
-		self.canvas.bake(&mut draw_commands, self.mode_stack.current_stroke(), selection_offset, selection_angle);
+		let selection_dilation = if let Tool::Resize {
+			origin: Some(ResizeDraft { center, initial_distance }),
+		} = &self.mode_stack.base_mode
+		{
+			let selection_distance = (self.position + cursor_virtual_position - center).norm();
+			let dilation = selection_distance / initial_distance;
+			Some((center.clone(), dilation))
+		} else {
+			None
+		};
+
+		self.canvas.bake(&mut draw_commands, self.mode_stack.current_stroke(), selection_offset, selection_angle, selection_dilation);
 
 		match &self.mode_stack.get() {
 			Tool::Select { origin: Some(origin) } => {
@@ -402,21 +413,16 @@ impl App {
 				if self.input_monitor.active_buttons.contains(Left) {
 					if self.input_monitor.different_buttons.contains(Left) && current_stroke.is_none() {
 						let srgba8 = hsv_to_srgba8(self.current_color);
-						*current_stroke = Some(Object {
-							object: Stroke::new(srgba8),
-							position: self.position,
-							orientation: 0.,
-						});
+						*current_stroke = Some(IncompleteStroke::new(cursor_virtual_position, srgba8));
 					}
 
 					if let Some(current_stroke) = current_stroke {
 						let offset = self.position + cursor_virtual_position - current_stroke.position;
-						current_stroke.object.add_point(offset, self.pressure.map_or(1., |pressure| (pressure / 32767.) as f32))
+						current_stroke.add_point(offset, self.pressure.map_or(1., |pressure| (pressure / 32767.) as f32))
 					}
 				} else {
-					if let Some(mut stroke) = current_stroke.take() {
-						stroke.position = stroke.position + stroke.object.commit();
-						self.canvas.perform_operation(Operation::CommitStrokes { strokes: vec![stroke] });
+					if let Some(stroke) = current_stroke.take() {
+						self.canvas.perform_operation(Operation::CommitStrokes { strokes: vec![stroke.commit()] });
 					}
 				}
 			},
@@ -535,7 +541,7 @@ impl App {
 					if let Some(origin) = origin.take() {
 						let selection_offset = self.position + cursor_virtual_position - origin;
 
-						let selected_indices = self.canvas.strokes().iter().enumerate().filter_map(|(index, stroke)| if stroke.object.is_selected { Some(index) } else { None }).collect::<Vec<_>>();
+						let selected_indices = self.canvas.strokes().iter().enumerate().filter_map(|(index, stroke)| if stroke.is_selected { Some(index) } else { None }).collect::<Vec<_>>();
 
 						if !selected_indices.is_empty() {
 							self.canvas.perform_operation(Operation::TranslateStrokes {
@@ -553,8 +559,9 @@ impl App {
 
 				if self.input_monitor.active_buttons.contains(Left) {
 					if self.input_monitor.different_buttons.contains(Left) && origin.is_none() {
+						// Compute the centroid.
 						let (sum, selected_point_count) = self.canvas.strokes().iter().fold((Vex::ZERO, 0), |(sum, selected_point_count), stroke| {
-							if stroke.object.is_selected {
+							if stroke.is_selected {
 								(sum + stroke.position * stroke.object.points.len() as f32, selected_point_count + stroke.object.points.len())
 							} else {
 								(sum, selected_point_count)
@@ -575,10 +582,48 @@ impl App {
 						let selection_offset = self.position + cursor_virtual_position - center;
 						let angle = initial_position.angle_to(selection_offset);
 
-						let selected_indices = self.canvas.strokes().iter().enumerate().filter_map(|(index, stroke)| if stroke.object.is_selected { Some(index) } else { None }).collect::<Vec<_>>();
+						let selected_indices = self.canvas.strokes().iter().enumerate().filter_map(|(index, stroke)| if stroke.is_selected { Some(index) } else { None }).collect::<Vec<_>>();
 
 						if !selected_indices.is_empty() {
 							self.canvas.perform_operation(Operation::RotateStrokes { indices: selected_indices, center, angle });
+						}
+					}
+				}
+			},
+			Tool::Resize { origin } => {
+				if self.is_cursor_relevant {
+					self.window.set_cursor_icon(winit::window::CursorIcon::Move);
+				}
+
+				if self.input_monitor.active_buttons.contains(Left) {
+					if self.input_monitor.different_buttons.contains(Left) && origin.is_none() {
+						// Compute the centroid.
+						let (sum, selected_point_count) = self.canvas.strokes().iter().fold((Vex::ZERO, 0), |(sum, selected_point_count), stroke| {
+							if stroke.is_selected {
+								(sum + stroke.position * stroke.object.points.len() as f32, selected_point_count + stroke.object.points.len())
+							} else {
+								(sum, selected_point_count)
+							}
+						});
+
+						let center = if selected_point_count > 0 { sum / selected_point_count as f32 } else { Vex::ZERO };
+
+						*origin = Some({
+							ResizeDraft {
+								center,
+								initial_distance: (self.position + cursor_virtual_position - center).norm(),
+							}
+						});
+					}
+				} else {
+					if let Some(ResizeDraft { center, initial_distance }) = origin.take() {
+						let selection_distance = (self.position + cursor_virtual_position - center).norm();
+						let dilation = selection_distance / initial_distance;
+
+						let selected_indices = self.canvas.strokes().iter().enumerate().filter_map(|(index, stroke)| if stroke.is_selected { Some(index) } else { None }).collect::<Vec<_>>();
+
+						if !selected_indices.is_empty() {
+							self.canvas.perform_operation(Operation::ResizeStrokes { indices: selected_indices, center, dilation });
 						}
 					}
 				}

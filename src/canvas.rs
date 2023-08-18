@@ -29,18 +29,24 @@ pub struct Image {
 pub struct Stroke {
 	pub color: [u8; 4],
 	pub points: Vec<Point>,
-	pub is_selected: bool,
+}
+
+#[derive(Clone)]
+pub struct IncompleteStroke {
+	pub position: Vex<2, Vx>,
+	pub color: [u8; 4],
+	pub points: Vec<Point>,
 	pub max_pressure: f32,
 }
 
 const STROKE_RADIUS: Vx = Vx(4.);
 
-impl Stroke {
-	pub fn new(color: [u8; 4]) -> Self {
+impl IncompleteStroke {
+	pub fn new(position: Vex<2, Vx>, color: [u8; 4]) -> Self {
 		Self {
+			position,
 			color,
 			points: Vec::new(),
-			is_selected: false,
 			max_pressure: 0.,
 		}
 	}
@@ -59,8 +65,8 @@ impl Stroke {
 		}
 	}
 
-	pub fn commit(&mut self) -> Vex<2, Vx> {
-		if !self.points.is_empty() {
+	pub fn commit(mut self) -> Object<Stroke> {
+		let local_centroid = if !self.points.is_empty() {
 			let local_centroid = self.points.iter().fold(Vex::ZERO, |acc, point| acc + point.position) / self.points.len() as f32;
 			for point in self.points.iter_mut() {
 				point.position = point.position - local_centroid;
@@ -68,6 +74,34 @@ impl Stroke {
 			local_centroid
 		} else {
 			Vex::ZERO
+		};
+
+		if self.points.len() == 1 {
+			self.points[0].pressure = self.max_pressure;
+		}
+
+		Object {
+			object: Stroke { color: self.color, points: self.points },
+			position: self.position + local_centroid,
+			orientation: 0.,
+			dilation: 1.,
+			is_selected: false,
+		}
+	}
+
+	pub fn preview(&self) -> Object<Stroke> {
+		let mut points = self.points.clone();
+
+		if points.len() == 1 {
+			points[0].pressure = self.max_pressure;
+		}
+
+		Object {
+			object: Stroke { color: self.color, points },
+			position: self.position,
+			orientation: 0.,
+			dilation: 1.,
+			is_selected: false,
 		}
 	}
 }
@@ -79,6 +113,7 @@ enum Retraction {
 	RecolorStrokes { index_color_pairs: Vec<(usize, [u8; 4])>, new_color: [u8; 4] },
 	TranslateStrokes { indices: Vec<usize>, vector: Vex<2, Vx> },
 	RotateStrokes { indices: Vec<usize>, center: Vex<2, Vx>, angle: f32 },
+	ResizeStrokes { indices: Vec<usize>, center: Vex<2, Vx>, dilation: f32 },
 }
 
 pub enum Operation {
@@ -88,6 +123,7 @@ pub enum Operation {
 	RecolorStrokes { indices: Vec<usize>, new_color: [u8; 4] },
 	TranslateStrokes { indices: Vec<usize>, vector: Vex<2, Vx> },
 	RotateStrokes { indices: Vec<usize>, center: Vex<2, Vx>, angle: f32 },
+	ResizeStrokes { indices: Vec<usize>, center: Vex<2, Vx>, dilation: f32 },
 }
 
 #[derive(Clone)]
@@ -97,6 +133,9 @@ pub struct Object<T> {
 	pub position: Vex<2, Vx>,
 	// Orientation about the local origin.
 	pub orientation: f32,
+	// Dilation about the local origin.
+	pub dilation: f32,
+	pub is_selected: bool,
 }
 
 pub struct Canvas {
@@ -177,6 +216,16 @@ impl Canvas {
 
 					Retraction::RotateStrokes { indices, center, angle }
 				},
+				ResizeStrokes { indices, center, dilation } => {
+					for index in indices.iter().copied() {
+						if let Some(object) = self.strokes.get_mut(index) {
+							object.position = object.position.dilate_about(center, dilation);
+							object.dilation *= dilation;
+						}
+					}
+
+					Retraction::ResizeStrokes { indices, center, dilation }
+				},
 			});
 		}
 	}
@@ -239,6 +288,16 @@ impl Canvas {
 
 					Operation::RotateStrokes { indices, center, angle }
 				},
+				ResizeStrokes { indices, center, dilation } => {
+					for index in indices.iter().copied() {
+						if let Some(object) = self.strokes.get_mut(index) {
+							object.position = object.position.dilate_about(center, 1. / dilation);
+							object.dilation /= dilation;
+						}
+					}
+
+					Operation::ResizeStrokes { indices, center, dilation }
+				},
 			});
 		}
 	}
@@ -253,32 +312,32 @@ impl Canvas {
 		'strokes: for stroke in self.strokes.iter_mut() {
 			if should_aggregate {
 				for point in stroke.object.points.iter() {
-					let point_position = (stroke.position + point.position.rotate(stroke.orientation) - screen_center).rotate(tilt);
+					let point_position = (stroke.position + point.position.rotate(stroke.orientation) * stroke.dilation - screen_center).rotate(tilt);
 					if point_position[0] >= min[0] && point_position[1] >= min[1] && point_position[0] <= max[0] && point_position[1] <= max[1] {
-						stroke.object.is_selected = !stroke.object.is_selected;
+						stroke.is_selected = !stroke.is_selected;
 						continue 'strokes;
 					}
 				}
 			} else {
 				for point in stroke.object.points.iter() {
-					let point_position = (stroke.position + point.position.rotate(stroke.orientation) - screen_center).rotate(tilt);
+					let point_position = (stroke.position + point.position.rotate(stroke.orientation) * stroke.dilation - screen_center).rotate(tilt);
 					if point_position[0] >= min[0] && point_position[1] >= min[1] && point_position[0] <= max[0] && point_position[1] <= max[1] {
-						stroke.object.is_selected = true;
+						stroke.is_selected = true;
 						continue 'strokes;
 					}
 				}
-				stroke.object.is_selected = false;
+				stroke.is_selected = false;
 			}
 		}
 	}
 
 	pub fn select_all(&mut self, is_selected: bool) {
 		for stroke in self.strokes.iter_mut() {
-			stroke.object.is_selected = is_selected;
+			stroke.is_selected = is_selected;
 		}
 	}
 
-	pub fn bake(&self, draw_commands: &mut Vec<DrawCommand>, current_stroke: Option<&Object<Stroke>>, selection_offset: Option<Vex<2, Vx>>, selection_angle: Option<(Vex<2, Vx>, f32)>) {
+	pub fn bake(&self, draw_commands: &mut Vec<DrawCommand>, current_stroke: Option<&IncompleteStroke>, selection_offset: Option<Vex<2, Vx>>, selection_angle: Option<(Vex<2, Vx>, f32)>, selection_dilation: Option<(Vex<2, Vx>, f32)>) {
 		for image in self.images.iter() {
 			draw_commands.push(DrawCommand::Texture {
 				position: image.position,
@@ -292,9 +351,10 @@ impl Canvas {
 		const BORDER_RADIUS: Vx = Vx(6.);
 		const BORDER_COLOR: [u8; 4] = [0x28, 0xc2, 0xff, 0xff];
 
-		for (stroke, is_current) in self.strokes.iter().zip(std::iter::repeat(false)).chain(current_stroke.map(|stroke| (stroke, true))) {
-			let stroke_offset = if stroke.object.is_selected { selection_offset.unwrap_or(Vex::ZERO) } else { Vex::ZERO };
-			let stroke_angle = if stroke.object.is_selected { selection_angle.unwrap_or((Vex::ZERO, 0.)) } else { (Vex::ZERO, 0.) };
+		for (stroke, is_current) in self.strokes.iter().zip(std::iter::repeat(false)).chain(current_stroke.map(|x| x.preview()).iter().map(|stroke| (stroke, true))) {
+			let stroke_offset = if stroke.is_selected { selection_offset.unwrap_or(Vex::ZERO) } else { Vex::ZERO };
+			let stroke_angle = if stroke.is_selected { selection_angle.unwrap_or((Vex::ZERO, 0.)) } else { (Vex::ZERO, 0.) };
+			let stroke_dilation = if stroke.is_selected { selection_dilation.unwrap_or((Vex::ZERO, 1.)) } else { (Vex::ZERO, 1.) };
 
 			if stroke.object.points.len() == 1 && !is_current {
 				let point = stroke.object.points.first().unwrap();
@@ -313,10 +373,14 @@ impl Canvas {
 					]
 				}
 
-				if stroke.object.is_selected {
+				if stroke.is_selected {
 					let stroke_index = u32::try_from(vertices.len()).unwrap();
-					let heptagonal_vertices =
-						heptagonal_vertices().map(|v| (stroke.position + point.position.rotate(stroke.orientation)).rotate_about(stroke_angle.0, stroke_angle.1) + stroke_offset + v * (stroke.object.max_pressure * STROKE_RADIUS + BORDER_RADIUS));
+					let heptagonal_vertices = heptagonal_vertices().map(|v| {
+						(stroke.position + point.position.rotate(stroke.orientation) * stroke.dilation)
+							.rotate_about(stroke_angle.0, stroke_angle.1)
+							.dilate_about(stroke_dilation.0, stroke_dilation.1)
+							+ stroke_offset + v * (point.pressure * stroke.dilation * stroke_dilation.1 * STROKE_RADIUS + BORDER_RADIUS)
+					});
 					vertices.extend(heptagonal_vertices.map(|position| Vertex {
 						position: [position[0], position[1]],
 						color: BORDER_COLOR.map(srgb8_to_f32),
@@ -324,7 +388,12 @@ impl Canvas {
 					indices.extend([0, 1, 2, 0, 2, 3, 0, 3, 4, 0, 4, 5, 0, 5, 6, 0, 6, 7, 0, 7, 1].map(|n| stroke_index + n));
 				}
 				let stroke_index = u32::try_from(vertices.len()).unwrap();
-				let heptagonal_vertices = heptagonal_vertices().map(|v| (stroke.position + point.position.rotate(stroke.orientation)).rotate_about(stroke_angle.0, stroke_angle.1) + stroke_offset + v * stroke.object.max_pressure * STROKE_RADIUS);
+				let heptagonal_vertices = heptagonal_vertices().map(|v| {
+					(stroke.position + point.position.rotate(stroke.orientation) * stroke.dilation)
+						.rotate_about(stroke_angle.0, stroke_angle.1)
+						.dilate_about(stroke_dilation.0, stroke_dilation.1)
+						+ stroke_offset + v * point.pressure * stroke.dilation * stroke_dilation.1 * STROKE_RADIUS
+				});
 				vertices.extend(heptagonal_vertices.map(|position| Vertex {
 					position: [position[0], position[1]],
 					color: stroke.object.color.map(srgb8_to_f32),
@@ -341,7 +410,7 @@ impl Canvas {
 					})
 					.collect::<Vec<_>>();
 
-				if stroke.object.is_selected {
+				if stroke.is_selected {
 					let stroke_index = u32::try_from(vertices.len()).unwrap();
 
 					let mut positions = vec![];
@@ -351,16 +420,18 @@ impl Canvas {
 						.array_windows::<2>()
 						.map(|[a, b]| {
 							let forward = b.position - a.position;
-							Vex([forward[1], -forward[0]]).normalized() * BORDER_RADIUS
+							Vex([forward[1], -forward[0]]).normalized() * BORDER_RADIUS / (stroke.dilation * stroke_dilation.1)
 						})
 						.collect::<Vec<_>>();
 
 					for ([a, b], (p, o)) in stroke.object.points.array_windows::<2>().zip(perpendiculars.iter().zip(border_perpendiculars)) {
 						let current_index = stroke_index + u32::try_from(positions.len()).unwrap();
-						positions.extend(
-							[a.position + p * a.pressure + o, a.position - p * a.pressure - o, b.position + p * b.pressure + o, b.position - p * b.pressure - o]
-								.map(|x| (stroke.position + x.rotate(stroke.orientation)).rotate_about(stroke_angle.0, stroke_angle.1) + stroke_offset),
-						);
+						positions.extend([a.position + p * a.pressure + o, a.position - p * a.pressure - o, b.position + p * b.pressure + o, b.position - p * b.pressure - o].map(|x| {
+							(stroke.position + x.rotate(stroke.orientation) * stroke.dilation)
+								.rotate_about(stroke_angle.0, stroke_angle.1)
+								.dilate_about(stroke_dilation.0, stroke_dilation.1)
+								+ stroke_offset
+						}));
 						indices.extend([0, 2, 3, 0, 3, 1].map(|n| current_index + n));
 					}
 
@@ -388,10 +459,12 @@ impl Canvas {
 				let mut positions = vec![];
 				for ([a, b], p) in stroke.object.points.array_windows::<2>().zip(&perpendiculars) {
 					let current_index = stroke_index + u32::try_from(positions.len()).unwrap();
-					positions.extend(
-						[a.position + p * a.pressure, a.position - p * a.pressure, b.position + p * b.pressure, b.position - p * b.pressure]
-							.map(|x| (stroke.position + x.rotate(stroke.orientation)).rotate_about(stroke_angle.0, stroke_angle.1) + stroke_offset),
-					);
+					positions.extend([a.position + p * a.pressure, a.position - p * a.pressure, b.position + p * b.pressure, b.position - p * b.pressure].map(|x| {
+						(stroke.position + x.rotate(stroke.orientation) * stroke.dilation)
+							.rotate_about(stroke_angle.0, stroke_angle.1)
+							.dilate_about(stroke_dilation.0, stroke_dilation.1)
+							+ stroke_offset
+					}));
 					indices.extend([0, 2, 3, 0, 3, 1].map(|n| current_index + n));
 				}
 

@@ -27,19 +27,25 @@ pub struct RotateDraft {
 	pub initial_position: Vex<2, Vx>,
 }
 
+pub struct ResizeDraft {
+	pub center: Vex<2, Vx>,
+	pub initial_distance: Vx,
+}
+
 pub enum ColorSelectionPart {
 	Hue,
 	SaturationValue,
 }
 
 pub enum Tool {
-	Draw { current_stroke: Option<Object<Stroke>> },
+	Draw { current_stroke: Option<IncompleteStroke> },
 	Select { origin: Option<Vex<2, Vx>> },
 	Pan { origin: Option<PanOrigin> },
 	Zoom { origin: Option<ZoomOrigin> },
 	Orbit { initial: Option<OrbitInitial> },
 	Move { origin: Option<Vex<2, Vx>> },
 	Rotate { origin: Option<RotateDraft> },
+	Resize { origin: Option<ResizeDraft> },
 	PickColor { cursor_physical_origin: Vex<2, Px>, part: Option<ColorSelectionPart> },
 }
 
@@ -140,12 +146,20 @@ impl ModeStack {
 			self.base_mode = Tool::Rotate { origin: None }
 		}
 	}
+
+	pub fn switch_resize(&mut self) {
+		if !matches!(self.base_mode, Tool::Resize { .. }) {
+			self.base_mode = Tool::Resize { origin: None }
+		}
+	}
+
 	pub fn is_drafting(&mut self) -> bool {
 		match self.get_mut() {
 			Tool::Draw { current_stroke } => current_stroke.is_some(),
 			Tool::Select { origin } => origin.is_some(),
 			Tool::Move { origin } => origin.is_some(),
 			Tool::Rotate { origin } => origin.is_some(),
+			Tool::Resize { origin } => origin.is_some(),
 			_ => false,
 		}
 	}
@@ -156,11 +170,12 @@ impl ModeStack {
 			Tool::Select { origin } => *origin = None,
 			Tool::Move { origin } => *origin = None,
 			Tool::Rotate { origin } => *origin = None,
+			Tool::Resize { origin } => *origin = None,
 			_ => {},
 		}
 	}
 
-	pub fn current_stroke(&self) -> Option<&Object<Stroke>> {
+	pub fn current_stroke(&self) -> Option<&IncompleteStroke> {
 		if let Tool::Draw { current_stroke } = &self.base_mode {
 			current_stroke.as_ref()
 		} else {

@@ -361,6 +361,13 @@ impl<A> Vex<2, A> {
 	{
 		center.clone() + (self.clone() - center).rotate(angle)
 	}
+
+	pub fn dilate_about(self, center: Self, dilation: f32) -> Vex<2, A>
+	where
+		A: Clone + Mul<f32, Output = A> + Add<Output = A> + Sub<Output = A>,
+	{
+		center.clone() + (self.clone() - center) * dilation
+	}
 }
 
 // Add:
