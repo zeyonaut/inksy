@@ -10,7 +10,6 @@ use fast_srgb8::srgb8_to_f32;
 use crate::{
 	pixel::{Vex, Vx, Vx2, Zero},
 	render::{DrawCommand, Vertex},
-	tools::RotateDraft,
 };
 
 #[derive(Clone)]

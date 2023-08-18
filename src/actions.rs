@@ -134,8 +134,16 @@ fn toggle_fullscreen(app: &mut App) {
 		if let Some(pre_fullscreen_state) = app.pre_fullscreen_state {
 			app.pre_fullscreen_state = None;
 			crate::windows::set_unfullscreen(app.window.hwnd(), pre_fullscreen_state);
+			if let PreFullscreenState::Normal(outer_position, inner_size) = pre_fullscreen_state {
+				app.window.set_outer_position(outer_position);
+				app.window.set_inner_size(inner_size);
+			}
 		} else {
-			app.pre_fullscreen_state = Some(if app.window.is_maximized() { PreFullscreenState::Maximized } else { PreFullscreenState::Normal });
+			app.pre_fullscreen_state = Some(if app.window.is_maximized() {
+				PreFullscreenState::Maximized
+			} else {
+				PreFullscreenState::Normal(app.window.outer_position().unwrap_or(Default::default()), app.window.inner_size())
+			});
 			crate::windows::set_fullscreen(app.window.hwnd());
 		}
 	}

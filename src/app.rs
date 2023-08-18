@@ -47,7 +47,7 @@ pub enum ClipboardContents {
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum PreFullscreenState {
-	Normal,
+	Normal(PhysicalPosition<i32>, PhysicalSize<u32>),
 	Maximized,
 }
 

@@ -49,7 +49,7 @@ pub fn set_unfullscreen(hwnd: HWND, pre_fullscreen_state: PreFullscreenState) {
 
 		let positioning_flag = match pre_fullscreen_state {
 			PreFullscreenState::Maximized => SWP_FRAMECHANGED,
-			PreFullscreenState::Normal => 0,
+			PreFullscreenState::Normal(..) => 0,
 		};
 
 		let mut window_placement = MaybeUninit::<WINDOWPLACEMENT>::uninit();
@@ -57,7 +57,7 @@ pub fn set_unfullscreen(hwnd: HWND, pre_fullscreen_state: PreFullscreenState) {
 		let mut window_placement = window_placement.assume_init();
 		window_placement.showCmd = match pre_fullscreen_state {
 			PreFullscreenState::Maximized => SW_SHOWMAXIMIZED,
-			PreFullscreenState::Normal => SW_SHOWNORMAL,
+			PreFullscreenState::Normal(..) => SW_SHOWNORMAL,
 		};
 
 		SetWindowLongPtrW(hwnd, GWL_STYLE, window_style);
