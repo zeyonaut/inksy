@@ -33,7 +33,7 @@ fn rotate(v: vec2f, angle: f32) -> vec2f {
 @vertex
 fn vs_main(vertex: Vertex) -> ClipVertex {
 	var out: ClipVertex;
-	out.position = vec4f(rotate((vertex.position - viewport.position) * viewport.scale, viewport.tilt) / viewport.size * vec2f(2., -2.), 0., 1.);
+	out.position = vec4f(rotate((vertex.position - viewport.position) * viewport.scale, -viewport.tilt) / viewport.size * vec2f(2., -2.), 0., 1.);
 	out.color = vertex.color;
 	out.polarity = vertex.polarity;
 	return out;

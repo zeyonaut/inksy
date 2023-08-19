@@ -15,6 +15,7 @@ mod actions;
 mod app;
 mod canvas;
 mod clipboard;
+mod file;
 #[path = "input/_.rs"]
 mod input;
 mod pixel;

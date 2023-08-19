@@ -11,13 +11,13 @@ use crate::{
 	app::{App, ClipboardContents, PreFullscreenState},
 	canvas::{Image, Object, Operation},
 	clipboard::ClipboardData,
+	file::{load_canvas_from_file, save_canvas_to_file},
 	input::{
 		keymap::{Action, Keymap},
 		Key,
 	},
 	pixel::{Px, Vex, Vx},
 	tools::TransientModeSwitch,
-	utility::hsv_to_srgba8,
 };
 
 pub fn default_keymap() -> Keymap {
@@ -25,27 +25,30 @@ pub fn default_keymap() -> Keymap {
 	const NONE: EnumSet<Key> = EnumSet::EMPTY;
 	use Key::*;
 
+	keymap.insert(Control | Shift, S, false, trigger(save_as_file));
+	keymap.insert(Control, S, false, trigger(save_file));
+	keymap.insert(Control, O, false, trigger(load_from_file));
 	keymap.insert(NONE, B, false, trigger(choose_draw_tool));
 	keymap.insert(NONE, Backspace, false, trigger(delete_selected_items));
-	keymap.insert(LControl | LShift, F, false, trigger(toggle_fullscreen));
-	keymap.insert(LControl, F, false, trigger(toggle_maximized));
-	keymap.insert(LControl, X, false, trigger(cut));
-	keymap.insert(LControl, C, false, trigger(copy));
-	keymap.insert(LControl, V, false, trigger(paste));
+	keymap.insert(Control | Shift, F, false, trigger(toggle_fullscreen));
+	keymap.insert(Control, F, false, trigger(toggle_maximized));
+	keymap.insert(Control, X, false, trigger(cut));
+	keymap.insert(Control, C, false, trigger(copy));
+	keymap.insert(Control, V, false, trigger(paste));
 	keymap.insert(NONE, A, false, trigger(select_all));
-	keymap.insert(LShift, A, false, trigger(select_none));
+	keymap.insert(Shift, A, false, trigger(select_none));
 	keymap.insert(Tab, R, false, trigger(recolor_selection));
 	keymap.insert(NONE, S, false, trigger(choose_select_tool));
 	keymap.insert(NONE, T, false, trigger(choose_move_tool));
-	keymap.insert(LShift, R, false, trigger(choose_rotate_tool));
-	keymap.insert(LControl, R, false, trigger(choose_resize_tool));
+	keymap.insert(Shift, R, false, trigger(choose_rotate_tool));
+	keymap.insert(Control, R, false, trigger(choose_resize_tool));
 	keymap.insert(NONE, Z, true, trigger(undo));
-	keymap.insert(LShift, Z, true, trigger(redo));
+	keymap.insert(Shift, Z, true, trigger(redo));
 	keymap.insert(NONE, Escape, false, trigger(discard_draft));
 
 	keymap.insert(NONE, Space, false, discovery(hold_pan_tool, release_pan_tool));
-	keymap.insert(NONE, LControl | Space, false, discovery(hold_zoom_tool, release_zoom_tool));
-	keymap.insert(NONE, LShift | Space, false, discovery(hold_orbit_tool, release_orbit_tool));
+	keymap.insert(NONE, Control | Space, false, discovery(hold_zoom_tool, release_zoom_tool));
+	keymap.insert(NONE, Shift | Space, false, discovery(hold_orbit_tool, release_orbit_tool));
 	keymap.insert(NONE, Tab, false, discovery(hold_color_picker_tool, release_color_picker_tool));
 
 	keymap
@@ -60,6 +63,29 @@ pub fn discovery(on_press: fn(&mut App), on_release: fn(&mut App)) -> Action {
 }
 
 // Actions:
+
+fn save_as_file(app: &mut App) {
+	if let Some(file_path) = rfd::FileDialog::new().add_filter("Inksy", &["inksy"]).save_file() {
+		app.canvas.file_path = Some(file_path);
+		save_canvas_to_file(&app.canvas, &app.renderer).expect("Failed to save canvas.");
+	}
+}
+
+fn save_file(app: &mut App) {
+	if app.canvas.file_path.is_none() {
+		save_as_file(app);
+	} else {
+		save_canvas_to_file(&app.canvas, &app.renderer).expect("Failed to save canvas.");
+	}
+}
+
+fn load_from_file(app: &mut App) {
+	if let Some(file_path) = rfd::FileDialog::new().add_filter("Inksy", &["inksy"]).pick_file() {
+		if let Some(canvas) = load_canvas_from_file(&mut app.renderer, file_path) {
+			app.canvas = canvas;
+		}
+	}
+}
 
 fn discard_draft(app: &mut App) {
 	app.mode_stack.discard_draft();
@@ -114,7 +140,7 @@ fn hold_color_picker_tool(app: &mut App) {
 		center: Some(if app.is_cursor_relevant {
 			app.cursor_physical_position
 		} else {
-			Vex([app.renderer.width as f32 / 2., app.renderer.height as f32 / 2.].map(Px))
+			Vex([app.renderer.config.width as f32 / 2., app.renderer.config.height as f32 / 2.].map(Px))
 		}),
 	});
 }
@@ -179,9 +205,9 @@ fn redo(app: &mut App) {
 }
 
 fn cut(app: &mut App) {
-	let semidimensions = Vex([app.renderer.width as f32 / 2., app.renderer.height as f32 / 2.].map(Px)).s(app.scale).z(app.zoom);
-	let cursor_virtual_position = (app.cursor_physical_position.s(app.scale).z(app.zoom) - semidimensions).rotate(-app.tilt);
-	let offset = cursor_virtual_position + app.position;
+	let semidimensions = Vex([app.renderer.config.width as f32 / 2., app.renderer.config.height as f32 / 2.].map(Px)).s(app.scale).z(app.canvas.view.zoom);
+	let cursor_virtual_position = (app.cursor_physical_position.s(app.scale).z(app.canvas.view.zoom) - semidimensions).rotate(-app.canvas.view.tilt);
+	let offset = cursor_virtual_position + app.canvas.view.position;
 
 	let (indices, strokes): (Vec<_>, Vec<_>) = app
 		.canvas
@@ -212,9 +238,9 @@ fn cut(app: &mut App) {
 }
 
 fn copy(app: &mut App) {
-	let semidimensions = Vex([app.renderer.width as f32 / 2., app.renderer.height as f32 / 2.].map(Px)).s(app.scale).z(app.zoom);
-	let cursor_virtual_position = (app.cursor_physical_position.s(app.scale).z(app.zoom) - semidimensions).rotate(-app.tilt);
-	let offset = cursor_virtual_position + app.position;
+	let semidimensions = Vex([app.renderer.config.width as f32 / 2., app.renderer.config.height as f32 / 2.].map(Px)).s(app.scale).z(app.canvas.view.zoom);
+	let cursor_virtual_position = (app.cursor_physical_position.s(app.scale).z(app.canvas.view.zoom) - semidimensions).rotate(-app.canvas.view.tilt);
+	let offset = cursor_virtual_position + app.canvas.view.position;
 
 	let strokes: Vec<_> = app
 		.canvas
@@ -240,12 +266,12 @@ fn paste(app: &mut App) {
 	match app.clipboard.read() {
 		Some(ClipboardData::Custom) => {
 			if let Some(ClipboardContents::Subcanvas(strokes)) = app.clipboard_contents.as_ref() {
-				let semidimensions = Vex([app.renderer.width as f32 / 2., app.renderer.height as f32 / 2.].map(Px)).s(app.scale).z(app.zoom);
-				let cursor_virtual_position = (app.cursor_physical_position.s(app.scale).z(app.zoom) - semidimensions).rotate(-app.tilt);
+				let semidimensions = Vex([app.renderer.config.width as f32 / 2., app.renderer.config.height as f32 / 2.].map(Px)).s(app.scale).z(app.canvas.view.zoom);
+				let cursor_virtual_position = (app.cursor_physical_position.s(app.scale).z(app.canvas.view.zoom) - semidimensions).rotate(-app.canvas.view.tilt);
 
 				app.canvas.select_all(false);
 
-				let offset = cursor_virtual_position + app.position;
+				let offset = cursor_virtual_position + app.canvas.view.position;
 
 				if !strokes.is_empty() {
 					app.canvas.perform_operation(Operation::CommitStrokes {
@@ -262,13 +288,18 @@ fn paste(app: &mut App) {
 			}
 		},
 		Some(ClipboardData::Image { dimensions, data }) => {
-			let texture_index = app.renderer.push_texture(dimensions, data);
+			let texture_index = app.canvas.push_texture(&app.renderer, dimensions, data);
 
 			app.canvas.perform_operation(Operation::PasteImage {
-				image: Image {
-					texture_index,
-					position: app.position,
-					dimensions: Vex(dimensions.map(|x| Vx(x as f32))),
+				image: Object {
+					object: Image {
+						texture_index,
+						dimensions: Vex(dimensions.map(|x| Vx(x as f32))),
+					},
+					position: app.canvas.view.position,
+					orientation: app.canvas.view.tilt,
+					dilation: 1.,
+					is_selected: false,
 				},
 			});
 		},
@@ -290,7 +321,7 @@ fn recolor_selection(app: &mut App) {
 	if !selected_indices.is_empty() {
 		app.canvas.perform_operation(Operation::RecolorStrokes {
 			indices: selected_indices,
-			new_color: hsv_to_srgba8(app.current_color),
+			new_color: app.current_color.to_srgb().to_srgba8(),
 		});
 	}
 }

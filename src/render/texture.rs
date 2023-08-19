@@ -7,8 +7,8 @@
 
 pub struct Texture {
 	rgba: Option<Vec<u8>>,
-	texture: wgpu::Texture,
-	pub texture_size: wgpu::Extent3d,
+	pub texture: wgpu::Texture,
+	pub extent: wgpu::Extent3d,
 	bind_group: wgpu::BindGroup,
 }
 
@@ -25,7 +25,7 @@ fn create_bind_group(device: &wgpu::Device, bind_group_layout: &wgpu::BindGroupL
 		sample_count: 1,
 		dimension: wgpu::TextureDimension::D2,
 		format: wgpu::TextureFormat::Rgba8UnormSrgb,
-		usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+		usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST | wgpu::TextureUsages::COPY_SRC,
 		view_formats: &[],
 	});
 	let texture_view = texture.create_view(&wgpu::TextureViewDescriptor::default());
@@ -76,7 +76,7 @@ impl Texture {
 			address_mode_u: wgpu::AddressMode::ClampToEdge,
 			address_mode_v: wgpu::AddressMode::ClampToEdge,
 			address_mode_w: wgpu::AddressMode::ClampToEdge,
-			mag_filter: wgpu::FilterMode::Linear,
+			mag_filter: wgpu::FilterMode::Nearest,
 			min_filter: wgpu::FilterMode::Linear,
 			mipmap_filter: wgpu::FilterMode::Linear,
 			..Default::default()
@@ -85,7 +85,7 @@ impl Texture {
 		Self {
 			rgba: Some(image),
 			texture,
-			texture_size,
+			extent: texture_size,
 			bind_group,
 		}
 	}
@@ -102,10 +102,10 @@ impl Texture {
 				&rgba,
 				wgpu::ImageDataLayout {
 					offset: 0,
-					bytes_per_row: Some(4 * self.texture_size.width),
-					rows_per_image: Some(self.texture_size.height),
+					bytes_per_row: Some(4 * self.extent.width),
+					rows_per_image: Some(self.extent.height),
 				},
-				self.texture_size,
+				self.extent,
 			);
 		}
 	}

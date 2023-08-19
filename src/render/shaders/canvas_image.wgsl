@@ -18,9 +18,11 @@ struct ViewportUniform {
 
 struct Instance {
 	@location(0) position: vec2f,
-	@location(1) dimensions: vec2f,
-	@location(2) sprite_position: vec2f,
-	@location(3) sprite_dimensions: vec2f,
+	@location(1) orientation: f32,
+	@location(2) dilation: f32,
+	@location(3) dimensions: vec2f,
+	@location(4) sprite_position: vec2f,
+	@location(5) sprite_dimensions: vec2f,
 }
 
 struct ClipVertex {
@@ -43,8 +45,8 @@ fn rotate(v: vec2f, angle: f32) -> vec2f {
 fn vs_main(instance: Instance, @builtin(vertex_index) index: u32) -> ClipVertex {
 	var out: ClipVertex;
 	let offset = vertices[index] - vec2(0.5);
-	let position = instance.position + offset * instance.dimensions;
-	out.position = vec4(rotate((position - viewport.position) * viewport.scale, viewport.tilt) / viewport.size * vec2(2., -2.), 0., 1.);
+	let position = instance.position + rotate((offset * instance.dimensions * instance.dilation), instance.orientation);
+	out.position = vec4(rotate((position - viewport.position) * viewport.scale, -viewport.tilt) / viewport.size * vec2(2., -2.), 0., 1.);
 	out.texture_coordinates = (instance.sprite_position + vertices[index] * instance.sprite_dimensions) / vec2f(textureDimensions(atlas_texture)) ;
 	return out;
 }

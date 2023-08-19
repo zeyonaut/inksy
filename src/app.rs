@@ -27,10 +27,10 @@ use crate::{
 		keymap::{execute_keymap, Keymap},
 		Button, InputMonitor, Key,
 	},
-	pixel::{Lx, Px, Scale, Vex, Vx, Zero, Zoom},
+	pixel::{Lx, Px, Scale, Vex, Zero, Zoom},
 	render::{DrawCommand, Renderer},
 	tools::*,
-	utility::hsv_to_srgba8,
+	utility::*,
 };
 
 // TODO: Move this somewhere saner.
@@ -59,10 +59,7 @@ pub struct App {
 	pub should_redraw: bool,
 	pub renderer: Renderer,
 	pub cursor_physical_position: Vex<2, Px>,
-	pub position: Vex<2, Vx>,
-	pub zoom: Zoom,
 	pub scale: Scale,
-	pub tilt: f32,
 	pub is_cursor_relevant: bool,
 	pub tablet_context: Option<TabletContext>,
 	pub pressure: Option<f64>,
@@ -71,7 +68,7 @@ pub struct App {
 	pub last_frame_instant: std::time::Instant,
 	pub input_monitor: InputMonitor,
 	pub keymap: Keymap,
-	pub current_color: [f32; 3],
+	pub current_color: HSV,
 	pub clipboard_contents: Option<ClipboardContents>,
 	pub pre_fullscreen_state: Option<PreFullscreenState>,
 }
@@ -100,21 +97,19 @@ impl App {
 		let tablet_context = TabletContext::new(&window);
 
 		// Set up the renderer.
-		let position = Vex::ZERO;
 		let size = window.inner_size();
-		let zoom = 1.;
-		let tilt = 0.;
 		let scale_factor = window.scale_factor() as f32;
-		let mut renderer = Renderer::new(&window, position, size.width, size.height, zoom, tilt, scale_factor);
+		let renderer = Renderer::new(&window, size.width, size.height, scale_factor);
 
 		// Make the window visible and immediately clear color to prevent a flash.
-		renderer.clear_color = wgpu::Color {
-			r: srgb8_to_f32(0x12) as f64,
-			g: srgb8_to_f32(0x12) as f64,
-			b: srgb8_to_f32(0x12) as f64,
-			a: srgb8_to_f32(0xff) as f64,
-		};
-		let output = renderer.clear().unwrap();
+		let output = renderer
+			.clear(wgpu::Color {
+				r: srgb8_to_f32(0x12) as f64,
+				g: srgb8_to_f32(0x12) as f64,
+				b: srgb8_to_f32(0x12) as f64,
+				a: srgb8_to_f32(0xff) as f64,
+			})
+			.unwrap();
 		window.set_visible(true);
 		// FIXME: This sometimes flashes, and sometimes doesn't.
 		output.present();
@@ -128,18 +123,15 @@ impl App {
 			renderer,
 			scale: Scale(scale_factor),
 			cursor_physical_position: Vex::ZERO,
-			position,
-			zoom: Zoom(zoom),
-			tilt,
 			is_cursor_relevant: false,
 			tablet_context,
 			pressure: None,
-			canvas: Canvas::new(),
+			canvas: Canvas::new(HSV([0., 0., 0.07])),
 			mode_stack: ModeStack::new(Tool::Draw { current_stroke: None }),
 			last_frame_instant: Instant::now() - Duration::new(1, 0),
 			input_monitor: InputMonitor::new(),
 			keymap,
-			current_color: [2. / 3., 0.016, 1.],
+			current_color: HSV([2. / 3., 0.016, 1.]),
 			clipboard_contents: None,
 			pre_fullscreen_state: None,
 		}
@@ -170,9 +162,13 @@ impl App {
 					WindowEvent::MouseWheel {
 						delta: MouseScrollDelta::LineDelta(lines, rows), ..
 					} => {
-						// Negative multiplier = reverse scrolling; positive multiplier = natural scrolling.
-						self.position = self.position + Vex([*lines, *rows].map(Lx)).z(self.zoom) * -32.;
-						self.renderer.reposition(self.position);
+						if !self.input_monitor.active_keys.contains(Key::Control) {
+							// Negative multiplier = reverse scrolling; positive multiplier = natural scrolling.
+							self.canvas.view.position = self.canvas.view.position + Vex([*lines, *rows].map(Lx)).z(self.canvas.view.zoom).rotate(self.canvas.view.tilt) * -32.;
+						} else {
+							self.canvas.view.zoom = Zoom(self.canvas.view.zoom.0 * f32::powf(2., *rows / 32.));
+						}
+						self.canvas.is_view_dirty = true;
 						self.should_redraw = true;
 					},
 					WindowEvent::CursorMoved { position, .. } => {
@@ -215,7 +211,7 @@ impl App {
 					self.last_frame_instant = Instant::now();
 					match self.repaint() {
 						Ok(_) => {},
-						Err(wgpu::SurfaceError::Lost) => self.renderer.resize(self.renderer.width, self.renderer.height, self.renderer.scale_factor),
+						Err(wgpu::SurfaceError::Lost) => self.renderer.resize(self.renderer.config.width, self.renderer.config.height, self.renderer.scale_factor),
 						Err(wgpu::SurfaceError::OutOfMemory) => *control_flow = ControlFlow::Exit,
 						Err(e) => eprintln!("{:?}", e),
 					}
@@ -236,12 +232,12 @@ impl App {
 	fn repaint(&mut self) -> Result<(), wgpu::SurfaceError> {
 		let mut draw_commands: Vec<DrawCommand> = vec![];
 
-		let semidimensions = Vex([self.renderer.width as f32 / 2., self.renderer.height as f32 / 2.].map(Px)).s(self.scale).z(self.zoom);
-		let cursor_virtual_position = (self.cursor_physical_position.s(self.scale).z(self.zoom) - semidimensions).rotate(-self.tilt);
+		let semidimensions = Vex([self.renderer.config.width as f32 / 2., self.renderer.config.height as f32 / 2.].map(Px)).s(self.scale).z(self.canvas.view.zoom);
+		let cursor_virtual_position = (self.cursor_physical_position.s(self.scale).z(self.canvas.view.zoom) - semidimensions).rotate(self.canvas.view.tilt);
 
 		// Draw brushstrokes and images.
 		let selection_offset = if let Tool::Move { origin: Some(origin) } = &self.mode_stack.base_mode {
-			Some(self.position + cursor_virtual_position - *origin)
+			Some(self.canvas.view.position + cursor_virtual_position - *origin)
 		} else {
 			None
 		};
@@ -250,7 +246,7 @@ impl App {
 			origin: Some(RotateDraft { center, initial_position }),
 		} = &self.mode_stack.base_mode
 		{
-			let selection_offset = self.position + cursor_virtual_position - center;
+			let selection_offset = self.canvas.view.position + cursor_virtual_position - center;
 			let angle = initial_position.angle_to(selection_offset);
 			Some((center.clone(), angle))
 		} else {
@@ -261,7 +257,7 @@ impl App {
 			origin: Some(ResizeDraft { center, initial_distance }),
 		} = &self.mode_stack.base_mode
 		{
-			let selection_distance = (self.position + cursor_virtual_position - center).norm();
+			let selection_distance = (self.canvas.view.position + cursor_virtual_position - center).norm();
 			let dilation = selection_distance / initial_distance;
 			Some((center.clone(), dilation))
 		} else {
@@ -272,8 +268,8 @@ impl App {
 
 		match &self.mode_stack.get() {
 			Tool::Select { origin: Some(origin) } => {
-				let current = (cursor_virtual_position.rotate(self.tilt) + semidimensions).z(self.zoom).s(self.scale);
-				let origin = ((origin - self.position).rotate(self.tilt) + semidimensions).z(self.zoom).s(self.scale);
+				let current = (cursor_virtual_position.rotate(-self.canvas.view.tilt) + semidimensions).z(self.canvas.view.zoom).s(self.scale);
+				let origin = ((origin - self.canvas.view.position).rotate(-self.canvas.view.tilt) + semidimensions).z(self.canvas.view.zoom).s(self.scale);
 				let topleft = Vex([current[0].min(origin[0]), current[1].min(origin[1])]);
 				draw_commands.push(DrawCommand::Card {
 					position: topleft,
@@ -283,7 +279,7 @@ impl App {
 				});
 			},
 			Tool::Orbit { .. } => {
-				let center = Vex([self.renderer.width as f32 / 2., self.renderer.height as f32 / 2.].map(Px));
+				let center = Vex([self.renderer.config.width as f32 / 2., self.renderer.config.height as f32 / 2.].map(Px));
 				let hue_outline_width = (SATURATION_VALUE_WINDOW_DIAMETER + 4. * OUTLINE_WIDTH).s(self.scale);
 				let hue_frame_width = (SATURATION_VALUE_WINDOW_DIAMETER + 2. * OUTLINE_WIDTH).s(self.scale);
 				let hue_window_width = SATURATION_VALUE_WINDOW_DIAMETER.s(self.scale);
@@ -299,24 +295,24 @@ impl App {
 					color: [0x00, 0x00, 0x00, 0xff],
 					radius: hue_frame_width / 2.,
 				});
-				let srgba8 = hsv_to_srgba8(self.current_color);
+				let srgba8 = self.current_color.to_srgb().to_srgba8();
 				draw_commands.push(DrawCommand::Card {
 					position: center.map(|x| x - hue_window_width / 2.),
 					dimensions: Vex([hue_window_width; 2]),
-					color: srgba8,
+					color: srgba8.0,
 					radius: hue_window_width / 2.,
 				});
 			},
 			Tool::PickColor { cursor_physical_origin: cursor_origin, .. } => {
 				draw_commands.push(DrawCommand::ColorSelector {
 					position: cursor_origin.map(|x| x - (HOLE_RADIUS + RING_WIDTH).s(self.scale)),
-					hsv: self.current_color,
+					hsv: self.current_color.0,
 					trigon_radius: TRIGON_RADIUS.s(self.scale),
 					hole_radius: HOLE_RADIUS.s(self.scale),
 					ring_width: RING_WIDTH.s(self.scale),
 				});
 
-				let srgba8 = hsv_to_srgba8(self.current_color);
+				let srgba8 = self.current_color.to_srgb().to_srgba8();
 
 				let ring_position = cursor_origin
 					+ Vex([
@@ -342,7 +338,7 @@ impl App {
 				draw_commands.push(DrawCommand::Card {
 					position: ring_position.map(|x| x - hue_window_width / 2.),
 					dimensions: Vex([hue_window_width; 2]),
-					color: srgba8,
+					color: srgba8.0,
 					radius: hue_window_width / 2.,
 				});
 
@@ -370,14 +366,14 @@ impl App {
 				draw_commands.push(DrawCommand::Card {
 					position: trigon_position.map(|x| x - sv_window_width / 2.),
 					dimensions: Vex([sv_window_width; 2]),
-					color: srgba8,
+					color: srgba8.0,
 					radius: sv_window_width / 2.,
 				});
 			},
 			_ => {},
 		}
 
-		self.renderer.render(draw_commands)
+		self.renderer.render(&mut self.canvas, draw_commands)
 	}
 
 	fn poll_tablet(&mut self) {
@@ -397,8 +393,8 @@ impl App {
 		use Button::*;
 		use Key::*;
 
-		let semidimensions = Vex([self.renderer.width as f32 / 2., self.renderer.height as f32 / 2.].map(Px)).s(self.scale).z(self.zoom);
-		let cursor_virtual_position = (self.cursor_physical_position.s(self.scale).z(self.zoom) - semidimensions).rotate(-self.tilt);
+		let semidimensions = Vex([self.renderer.config.width as f32 / 2., self.renderer.config.height as f32 / 2.].map(Px)).s(self.scale).z(self.canvas.view.zoom);
+		let cursor_virtual_position = (self.cursor_physical_position.s(self.scale).z(self.canvas.view.zoom) - semidimensions).rotate(self.canvas.view.tilt);
 
 		if self.input_monitor.is_fresh {
 			self.should_redraw = true;
@@ -412,12 +408,12 @@ impl App {
 				}
 				if self.input_monitor.active_buttons.contains(Left) {
 					if self.input_monitor.different_buttons.contains(Left) && current_stroke.is_none() {
-						let srgba8 = hsv_to_srgba8(self.current_color);
+						let srgba8 = self.current_color.to_srgb().to_srgba8();
 						*current_stroke = Some(IncompleteStroke::new(cursor_virtual_position, srgba8));
 					}
 
 					if let Some(current_stroke) = current_stroke {
-						let offset = self.position + cursor_virtual_position - current_stroke.position;
+						let offset = self.canvas.view.position + cursor_virtual_position - current_stroke.position;
 						current_stroke.add_point(offset, self.pressure.map_or(1., |pressure| (pressure / 32767.) as f32))
 					}
 				} else {
@@ -427,7 +423,7 @@ impl App {
 				}
 			},
 			Tool::Select { origin } => {
-				let offset = cursor_virtual_position + self.position;
+				let offset = cursor_virtual_position + self.canvas.view.position;
 				if self.is_cursor_relevant {
 					self.window.set_cursor_icon(winit::window::CursorIcon::Crosshair);
 				}
@@ -438,11 +434,11 @@ impl App {
 					}
 				} else {
 					if let Some(origin) = origin.take() {
-						let offset = cursor_virtual_position.rotate(self.tilt);
-						let origin = (origin - self.position).rotate(self.tilt);
+						let offset = cursor_virtual_position.rotate(-self.canvas.view.tilt);
+						let origin = (origin - self.canvas.view.position).rotate(-self.canvas.view.tilt);
 						let min = Vex([offset[0].min(origin[0]), offset[1].min(origin[1])]);
 						let max = Vex([offset[0].max(origin[0]), offset[1].max(origin[1])]);
-						self.canvas.select(min, max, self.tilt, self.position, self.input_monitor.active_keys.contains(LShift));
+						self.canvas.select(min, max, self.canvas.view.tilt, self.canvas.view.position, self.input_monitor.active_keys.contains(Shift));
 					}
 				}
 			},
@@ -454,7 +450,7 @@ impl App {
 					if origin.is_none() {
 						*origin = Some(PanOrigin {
 							cursor: cursor_virtual_position,
-							position: self.position,
+							position: self.canvas.view.position,
 						});
 					}
 				} else {
@@ -467,8 +463,8 @@ impl App {
 				}
 
 				if let Some(origin) = origin {
-					self.position = origin.position - (cursor_virtual_position - origin.cursor);
-					self.renderer.reposition(self.position);
+					self.canvas.view.position = origin.position - (cursor_virtual_position - origin.cursor);
+					self.canvas.is_view_dirty = true;
 				}
 			},
 			Tool::Zoom { origin } => {
@@ -477,9 +473,9 @@ impl App {
 						self.window.set_cursor_icon(winit::window::CursorIcon::Grabbing);
 					}
 					if origin.is_none() {
-						let window_height = Px(self.renderer.height as f32);
+						let window_height = Px(self.renderer.config.height as f32);
 						*origin = Some(ZoomOrigin {
-							initial_zoom: self.zoom.0,
+							initial_zoom: self.canvas.view.zoom.0,
 							initial_y_ratio: self.cursor_physical_position[1] / window_height,
 						});
 					}
@@ -493,11 +489,11 @@ impl App {
 				}
 
 				if let Some(origin) = origin {
-					let window_height = Px(self.renderer.height as f32);
+					let window_height = Px(self.renderer.config.height as f32);
 					let y_ratio = self.cursor_physical_position[1] / window_height;
 					let zoom_ratio = f32::powf(8., origin.initial_y_ratio - y_ratio);
-					self.zoom = Zoom(origin.initial_zoom * zoom_ratio);
-					self.renderer.rezoom(self.zoom.0);
+					self.canvas.view.zoom = Zoom(origin.initial_zoom * zoom_ratio);
+					self.canvas.is_view_dirty = true;
 				}
 			},
 			Tool::Orbit { initial } => {
@@ -506,10 +502,13 @@ impl App {
 						self.window.set_cursor_icon(winit::window::CursorIcon::Grabbing);
 					}
 					if initial.is_none() {
-						let semidimensions = Vex([self.renderer.width as f32 / 2., self.renderer.height as f32 / 2.].map(Px));
+						let semidimensions = Vex([self.renderer.config.width as f32 / 2., self.renderer.config.height as f32 / 2.].map(Px));
 						let vector = self.cursor_physical_position - semidimensions;
 						let angle = vector.angle();
-						*initial = Some(OrbitInitial { tilt: self.tilt, cursor_angle: angle });
+						*initial = Some(OrbitInitial {
+							tilt: self.canvas.view.tilt,
+							cursor_angle: angle,
+						});
 					}
 				} else {
 					if self.is_cursor_relevant {
@@ -521,11 +520,11 @@ impl App {
 				}
 
 				if let Some(OrbitInitial { tilt, cursor_angle }) = initial {
-					let semidimensions = Vex([self.renderer.width as f32 / 2., self.renderer.height as f32 / 2.].map(Px));
+					let semidimensions = Vex([self.renderer.config.width as f32 / 2., self.renderer.config.height as f32 / 2.].map(Px));
 					let vector = self.cursor_physical_position - semidimensions;
 					let angle = vector.angle();
-					self.tilt = *tilt + angle - *cursor_angle;
-					self.renderer.retilt(self.tilt);
+					self.canvas.view.tilt = *tilt - angle + *cursor_angle;
+					self.canvas.is_view_dirty = true;
 				}
 			},
 			Tool::Move { origin } => {
@@ -535,11 +534,11 @@ impl App {
 
 				if self.input_monitor.active_buttons.contains(Left) {
 					if self.input_monitor.different_buttons.contains(Left) && origin.is_none() {
-						*origin = Some(self.position + cursor_virtual_position);
+						*origin = Some(self.canvas.view.position + cursor_virtual_position);
 					}
 				} else {
 					if let Some(origin) = origin.take() {
-						let selection_offset = self.position + cursor_virtual_position - origin;
+						let selection_offset = self.canvas.view.position + cursor_virtual_position - origin;
 
 						let selected_indices = self.canvas.strokes().iter().enumerate().filter_map(|(index, stroke)| if stroke.is_selected { Some(index) } else { None }).collect::<Vec<_>>();
 
@@ -573,13 +572,13 @@ impl App {
 						*origin = Some({
 							RotateDraft {
 								center,
-								initial_position: self.position + cursor_virtual_position - center,
+								initial_position: self.canvas.view.position + cursor_virtual_position - center,
 							}
 						});
 					}
 				} else {
 					if let Some(RotateDraft { center, initial_position }) = origin.take() {
-						let selection_offset = self.position + cursor_virtual_position - center;
+						let selection_offset = self.canvas.view.position + cursor_virtual_position - center;
 						let angle = initial_position.angle_to(selection_offset);
 
 						let selected_indices = self.canvas.strokes().iter().enumerate().filter_map(|(index, stroke)| if stroke.is_selected { Some(index) } else { None }).collect::<Vec<_>>();
@@ -611,13 +610,13 @@ impl App {
 						*origin = Some({
 							ResizeDraft {
 								center,
-								initial_distance: (self.position + cursor_virtual_position - center).norm(),
+								initial_distance: (self.canvas.view.position + cursor_virtual_position - center).norm(),
 							}
 						});
 					}
 				} else {
 					if let Some(ResizeDraft { center, initial_distance }) = origin.take() {
-						let selection_distance = (self.position + cursor_virtual_position - center).norm();
+						let selection_distance = (self.canvas.view.position + cursor_virtual_position - center).norm();
 						let dilation = selection_distance / initial_distance;
 
 						let selected_indices = self.canvas.strokes().iter().enumerate().filter_map(|(index, stroke)| if stroke.is_selected { Some(index) } else { None }).collect::<Vec<_>>();

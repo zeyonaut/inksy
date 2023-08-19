@@ -7,7 +7,7 @@
 
 mod buffer;
 mod instance_renderer;
-mod texture;
+pub mod texture;
 mod uniform_buffer;
 mod vertex_renderer;
 
@@ -24,7 +24,10 @@ use self::{
 	uniform_buffer::UniformBuffer,
 	vertex_renderer::{VertexAttributes, VertexRenderer},
 };
-use crate::pixel::{Px, Vex, Vx};
+use crate::{
+	canvas::Canvas,
+	pixel::{Px, Vex, Vx},
+};
 
 const SHOULD_MULTISAMPLE: bool = false;
 
@@ -32,7 +35,7 @@ pub enum DrawCommand {
 	Trimesh { vertices: Vec<Vertex>, indices: Vec<u32> },
 	Card { position: Vex<2, Px>, dimensions: Vex<2, Px>, color: [u8; 4], radius: Px },
 	ColorSelector { position: Vex<2, Px>, hsv: [f32; 3], trigon_radius: Px, hole_radius: Px, ring_width: Px },
-	Texture { position: Vex<2, Vx>, dimensions: Vex<2, Vx>, index: usize },
+	Texture { position: Vex<2, Vx>, dimensions: Vex<2, Vx>, orientation: f32, dilation: f32, index: usize },
 }
 
 pub enum RenderCommand {
@@ -69,13 +72,15 @@ pub struct ViewportUniform {
 #[derive(Default, Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 struct CanvasImageInstance {
 	pub position: [f32; 2],
+	pub orientation: f32,
+	pub dilation: f32,
 	pub dimensions: [f32; 2],
 	pub sprite_position: [f32; 2],
 	pub sprite_dimensions: [f32; 2],
 }
 
-impl InstanceAttributes<4> for CanvasImageInstance {
-	const ATTRIBUTES: [wgpu::VertexAttribute; 4] = wgpu::vertex_attr_array![0 => Float32x2, 1 => Float32x2, 2 => Float32x2, 3 => Float32x2];
+impl InstanceAttributes<6> for CanvasImageInstance {
+	const ATTRIBUTES: [wgpu::VertexAttribute; 6] = wgpu::vertex_attr_array![0 => Float32x2, 1 => Float32, 2 => Float32, 3 => Float32x2, 4 => Float32x2, 5 => Float32x2];
 }
 
 #[repr(C)]
@@ -119,20 +124,13 @@ impl InstanceAttributes<3> for ColorTrigonInstance {
 // This struct stores the current state of the WGPU renderer.
 pub struct Renderer {
 	surface: wgpu::Surface,
-	device: wgpu::Device,
+	pub device: wgpu::Device,
 	queue: wgpu::Queue,
-	config: wgpu::SurfaceConfiguration,
-	pub width: u32,
-	pub height: u32,
-	pub position: Vex<2, Vx>,
-	pub zoom: f32,
-	pub tilt: f32,
+	pub config: wgpu::SurfaceConfiguration,
 	pub scale_factor: f32,
 	pub is_pending_resize: bool,
-	pub clear_color: wgpu::Color,
 	viewport_buffer: UniformBuffer<ViewportUniform>,
 	texture_bind_group_layout: wgpu::BindGroupLayout,
-	textures: Vec<Texture>,
 	text_renderer: glyphon::TextRenderer,
 	font_system: glyphon::FontSystem,
 	text_atlas: glyphon::TextAtlas,
@@ -149,7 +147,7 @@ pub struct Renderer {
 
 impl Renderer {
 	// Create an instance of the renderer.
-	pub fn new<W>(window: &W, position: Vex<2, Vx>, width: u32, height: u32, zoom: f32, tilt: f32, scale_factor: f32) -> Self
+	pub fn new<W>(window: &W, width: u32, height: u32, scale_factor: f32) -> Self
 	where
 		W: HasRawWindowHandle + HasRawDisplayHandle,
 	{
@@ -237,8 +235,8 @@ impl Renderer {
 			ViewportUniform {
 				position: [0., 0.],
 				size: [width as f32, height as f32],
-				scale: zoom * scale_factor,
-				tilt,
+				scale: scale_factor,
+				tilt: 0.,
 			},
 		);
 
@@ -264,17 +262,10 @@ impl Renderer {
 			device,
 			queue,
 			config,
-			width,
-			height,
-			position,
-			zoom,
-			tilt,
 			scale_factor,
 			is_pending_resize: false,
-			clear_color: wgpu::Color::BLACK,
 			viewport_buffer,
 			texture_bind_group_layout,
-			textures: vec![],
 			text_renderer,
 			font_system,
 			text_atlas,
@@ -294,8 +285,6 @@ impl Renderer {
 	pub fn resize(&mut self, width: u32, height: u32, scale_factor: f32) {
 		// We ensure the requested size has nonzero dimensions before applying it.
 		if width > 0 && height > 0 {
-			self.width = width;
-			self.height = height;
 			self.config.width = width;
 			self.config.height = height;
 			self.scale_factor = scale_factor;
@@ -316,43 +305,29 @@ impl Renderer {
 		}
 	}
 
-	pub fn reposition(&mut self, position: Vex<2, Vx>) {
-		if self.position != position {
-			self.position = position;
-			self.is_pending_resize = true;
-		}
-	}
-
-	pub fn rezoom(&mut self, zoom: f32) {
-		if self.zoom != zoom {
-			self.zoom = zoom;
-			self.is_pending_resize = true;
-		}
-	}
-
-	pub fn retilt(&mut self, tilt: f32) {
-		if self.tilt != tilt {
-			self.tilt = tilt;
-			self.is_pending_resize = true;
-		}
-	}
-
 	pub fn update(&mut self) {}
 
-	pub fn render(&mut self, draw_commands: Vec<DrawCommand>) -> Result<(), wgpu::SurfaceError> {
-		if self.is_pending_resize {
+	pub fn render(&mut self, canvas: &mut Canvas, draw_commands: Vec<DrawCommand>) -> Result<(), wgpu::SurfaceError> {
+		if self.is_pending_resize || canvas.is_view_dirty {
 			// We write the new size to the viewport buffer.
 			self.viewport_buffer.write(
 				&self.queue,
 				ViewportUniform {
-					position: self.position.0.map(Into::into),
-					size: [self.width as f32, self.height as f32],
-					scale: self.zoom * self.scale_factor,
-					tilt: self.tilt,
+					position: canvas.view.position.0.map(Into::into),
+					size: [self.config.width as f32, self.config.height as f32],
+					scale: canvas.view.zoom.0 * self.scale_factor,
+					tilt: canvas.view.tilt,
 				},
 			);
 			self.is_pending_resize = false;
+			canvas.is_view_dirty = false;
 		}
+
+		// We compute the background color of the canvas.
+		let background_color = {
+			let [r, g, b, a] = canvas.background_color.to_srgb().to_srgba8().to_lrgba().0.map(|x| x as f64);
+			wgpu::Color { r, g, b, a }
+		};
 
 		let mut canvas_image_instances: Vec<CanvasImageInstance> = vec![];
 		let mut strokes_vertices: Vec<Vertex> = vec![];
@@ -406,14 +381,22 @@ impl Renderer {
 					});
 					render_commands.push(RenderCommand::ColorTrigon(trigon_instance_start..trigon_instance_start + 1));
 				},
-				DrawCommand::Texture { index, position, dimensions } => {
-					if let Some(texture) = self.textures.get(index) {
+				DrawCommand::Texture {
+					index,
+					position,
+					orientation,
+					dilation,
+					dimensions,
+				} => {
+					if let Some(texture) = canvas.textures.get(index) {
 						let instance_start = canvas_image_instances.len() as u32;
 						canvas_image_instances.push(CanvasImageInstance {
 							position: position.0.map(|Vx(x)| x),
+							orientation,
+							dilation,
 							dimensions: dimensions.0.map(|Vx(x)| x),
 							sprite_position: [0.; 2],
-							sprite_dimensions: [texture.texture_size.width as f32, texture.texture_size.height as f32],
+							sprite_dimensions: [texture.extent.width as f32, texture.extent.height as f32],
 						});
 						render_commands.push(RenderCommand::Texture(instance_start..instance_start + 1, index));
 					}
@@ -429,7 +412,7 @@ impl Renderer {
 		self.color_ring_renderer.prepare(&self.device, &self.queue, color_ring_instances);
 		self.color_trigon_renderer.prepare(&self.device, &self.queue, color_trigon_instances);
 
-		for texture in self.textures.iter_mut() {
+		for texture in canvas.textures.iter_mut() {
 			texture.prepare(&self.queue);
 		}
 
@@ -483,7 +466,7 @@ impl Renderer {
 				view: multisample_view.as_ref().unwrap_or(&output_view),
 				resolve_target: multisample_view.as_ref().map(|_| &output_view),
 				ops: wgpu::Operations {
-					load: wgpu::LoadOp::Clear(self.clear_color),
+					load: wgpu::LoadOp::Clear(background_color),
 					store: true,
 				},
 			})],
@@ -504,7 +487,7 @@ impl Renderer {
 				RenderCommand::ColorRing(instance_range) => self.color_ring_renderer.render(&mut render_pass, instance_range),
 				RenderCommand::ColorTrigon(instance_range) => self.color_trigon_renderer.render(&mut render_pass, instance_range),
 				RenderCommand::Texture(instance_range, index) => {
-					self.textures[index].activate(&mut render_pass, 1);
+					canvas.textures[index].activate(&mut render_pass, 1);
 					self.canvas_image_renderer.render(&mut render_pass, instance_range);
 				},
 			}
@@ -520,7 +503,7 @@ impl Renderer {
 		Ok(())
 	}
 
-	pub fn clear(&self) -> Result<SurfaceTexture, wgpu::SurfaceError> {
+	pub fn clear(&self, clear_color: wgpu::Color) -> Result<SurfaceTexture, wgpu::SurfaceError> {
 		// Set up the surface texture we will later render to.
 		let output = self.surface.get_current_texture()?;
 		let view = output.texture.create_view(&wgpu::TextureViewDescriptor::default());
@@ -536,7 +519,7 @@ impl Renderer {
 				view: &view,
 				resolve_target: None,
 				ops: wgpu::Operations {
-					load: wgpu::LoadOp::Clear(self.clear_color),
+					load: wgpu::LoadOp::Clear(clear_color),
 					store: true,
 				},
 			})],
@@ -552,8 +535,46 @@ impl Renderer {
 		Ok(output)
 	}
 
-	pub fn push_texture(&mut self, dimensions: [u32; 2], image: Vec<u8>) -> usize {
-		self.textures.push(Texture::new(&self.device, dimensions, image, &self.texture_bind_group_layout));
-		self.textures.len() - 1
+	pub fn create_texture(&self, dimensions: [u32; 2], image: Vec<u8>) -> Texture {
+		Texture::new(&self.device, dimensions, image, &self.texture_bind_group_layout)
+	}
+
+	// Returns bytes per row.
+	pub fn fetch_texture(&self, texture: &Texture) -> Option<(wgpu::Buffer, usize)> {
+		let source_bytes_per_row = texture.extent.width as usize * 4;
+		let alignment = wgpu::COPY_BYTES_PER_ROW_ALIGNMENT as usize;
+		let row_padding = (alignment - source_bytes_per_row % alignment) % alignment;
+		let bytes_per_row = (source_bytes_per_row + row_padding) as u32;
+		let rows_per_image = texture.extent.height as u32;
+
+		let output_buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
+			size: bytes_per_row as u64 * rows_per_image as u64,
+			usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+			label: None,
+			mapped_at_creation: false,
+		});
+
+		let mut encoder = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
+		encoder.copy_texture_to_buffer(
+			wgpu::ImageCopyTexture {
+				aspect: wgpu::TextureAspect::All,
+				texture: &texture.texture,
+				mip_level: 0,
+				origin: wgpu::Origin3d::ZERO,
+			},
+			wgpu::ImageCopyBuffer {
+				buffer: &output_buffer,
+				layout: wgpu::ImageDataLayout {
+					offset: 0,
+					bytes_per_row: Some(bytes_per_row),
+					rows_per_image: Some(rows_per_image),
+				},
+			},
+			texture.extent,
+		);
+
+		self.queue.submit(Some(encoder.finish()));
+
+		Some((output_buffer, bytes_per_row as usize))
 	}
 }

@@ -57,8 +57,8 @@ pub enum Key {
 	Backspace,
 	Space,
 	Tab,
-	LControl,
-	LShift,
+	Control,
+	Shift,
 }
 
 #[derive(EnumSetType)]
@@ -133,8 +133,10 @@ impl InputMonitor {
 				VirtualKeyCode::Escape => Escape,
 				VirtualKeyCode::Space => Space,
 				VirtualKeyCode::Tab => Tab,
-				VirtualKeyCode::LShift => LShift,
-				VirtualKeyCode::LControl => LControl,
+				VirtualKeyCode::LShift => Shift,
+				VirtualKeyCode::RShift => Shift,
+				VirtualKeyCode::LControl => Control,
+				VirtualKeyCode::RControl => Control,
 				_ => return,
 			};
 			let is_active = keyboard_input.state == ElementState::Pressed;
