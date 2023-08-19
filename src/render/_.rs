@@ -48,11 +48,12 @@ pub enum RenderCommand {
 #[derive(Default, Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct Vertex {
 	pub position: [Vx; 2],
+	pub polarity: f32,
 	pub color: [f32; 4],
 }
 
-impl VertexAttributes<2> for Vertex {
-	const ATTRIBUTES: [wgpu::VertexAttribute; 2] = wgpu::vertex_attr_array![0 => Float32x2, 1 => Float32x4];
+impl VertexAttributes<3> for Vertex {
+	const ATTRIBUTES: [wgpu::VertexAttribute; 3] = wgpu::vertex_attr_array![0 => Float32x2, 1 => Float32, 2 => Float32x4];
 }
 
 #[repr(C)]

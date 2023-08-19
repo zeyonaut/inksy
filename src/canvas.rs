@@ -358,44 +358,52 @@ impl Canvas {
 
 			if stroke.object.points.len() == 1 && !is_current {
 				let point = stroke.object.points.first().unwrap();
-				fn heptagonal_vertices() -> [Vex<2, f32>; 8] {
+				fn heptagonal_vertices() -> [(Vex<2, f32>, f32); 8] {
 					use std::f32::consts::PI;
 					let i = Vex([1., 0.]);
 					[
-						Vex::ZERO,
-						i,
-						i.rotate(2. * PI * 1. / 7.),
-						i.rotate(2. * PI * 2. / 7.),
-						i.rotate(2. * PI * 3. / 7.),
-						i.rotate(2. * PI * 4. / 7.),
-						i.rotate(2. * PI * 5. / 7.),
-						i.rotate(2. * PI * 6. / 7.),
+						(Vex::ZERO, 0.),
+						(i, 1.),
+						(i.rotate(2. * PI * 1. / 7.), 1.),
+						(i.rotate(2. * PI * 2. / 7.), 1.),
+						(i.rotate(2. * PI * 3. / 7.), 1.),
+						(i.rotate(2. * PI * 4. / 7.), 1.),
+						(i.rotate(2. * PI * 5. / 7.), 1.),
+						(i.rotate(2. * PI * 6. / 7.), 1.),
 					]
 				}
 
 				if stroke.is_selected {
 					let stroke_index = u32::try_from(vertices.len()).unwrap();
-					let heptagonal_vertices = heptagonal_vertices().map(|v| {
-						(stroke.position + point.position.rotate(stroke.orientation) * stroke.dilation)
-							.rotate_about(stroke_angle.0, stroke_angle.1)
-							.dilate_about(stroke_dilation.0, stroke_dilation.1)
-							+ stroke_offset + v * (point.pressure * stroke.dilation * stroke_dilation.1 * STROKE_RADIUS + BORDER_RADIUS)
+					let heptagonal_vertices = heptagonal_vertices().map(|(v, s)| {
+						(
+							(stroke.position + point.position.rotate(stroke.orientation) * stroke.dilation)
+								.rotate_about(stroke_angle.0, stroke_angle.1)
+								.dilate_about(stroke_dilation.0, stroke_dilation.1)
+								+ stroke_offset + v * (point.pressure * stroke.dilation * stroke_dilation.1 * STROKE_RADIUS + BORDER_RADIUS),
+							s,
+						)
 					});
-					vertices.extend(heptagonal_vertices.map(|position| Vertex {
+					vertices.extend(heptagonal_vertices.map(|(position, polarity)| Vertex {
 						position: [position[0], position[1]],
+						polarity,
 						color: BORDER_COLOR.map(srgb8_to_f32),
 					}));
 					indices.extend([0, 1, 2, 0, 2, 3, 0, 3, 4, 0, 4, 5, 0, 5, 6, 0, 6, 7, 0, 7, 1].map(|n| stroke_index + n));
 				}
 				let stroke_index = u32::try_from(vertices.len()).unwrap();
-				let heptagonal_vertices = heptagonal_vertices().map(|v| {
-					(stroke.position + point.position.rotate(stroke.orientation) * stroke.dilation)
-						.rotate_about(stroke_angle.0, stroke_angle.1)
-						.dilate_about(stroke_dilation.0, stroke_dilation.1)
-						+ stroke_offset + v * point.pressure * stroke.dilation * stroke_dilation.1 * STROKE_RADIUS
+				let heptagonal_vertices = heptagonal_vertices().map(|(v, s)| {
+					(
+						(stroke.position + point.position.rotate(stroke.orientation) * stroke.dilation)
+							.rotate_about(stroke_angle.0, stroke_angle.1)
+							.dilate_about(stroke_dilation.0, stroke_dilation.1)
+							+ stroke_offset + v * point.pressure * stroke.dilation * stroke_dilation.1 * STROKE_RADIUS,
+						s,
+					)
 				});
-				vertices.extend(heptagonal_vertices.map(|position| Vertex {
+				vertices.extend(heptagonal_vertices.map(|(position, polarity)| Vertex {
 					position: [position[0], position[1]],
+					polarity,
 					color: stroke.object.color.map(srgb8_to_f32),
 				}));
 				indices.extend([0, 1, 2, 0, 2, 3, 0, 3, 4, 0, 4, 5, 0, 5, 6, 0, 6, 7, 0, 7, 1].map(|n| stroke_index + n));
@@ -426,12 +434,17 @@ impl Canvas {
 
 					for ([a, b], (p, o)) in stroke.object.points.array_windows::<2>().zip(perpendiculars.iter().zip(border_perpendiculars)) {
 						let current_index = stroke_index + u32::try_from(positions.len()).unwrap();
-						positions.extend([a.position + p * a.pressure + o, a.position - p * a.pressure - o, b.position + p * b.pressure + o, b.position - p * b.pressure - o].map(|x| {
-							(stroke.position + x.rotate(stroke.orientation) * stroke.dilation)
-								.rotate_about(stroke_angle.0, stroke_angle.1)
-								.dilate_about(stroke_dilation.0, stroke_dilation.1)
-								+ stroke_offset
-						}));
+						positions.extend(
+							[(a.position + p * a.pressure + o, 1.), (a.position - p * a.pressure - o, -1.), (b.position + p * b.pressure + o, 1.), (b.position - p * b.pressure - o, -1.)].map(|(x, s)| {
+								(
+									(stroke.position + x.rotate(stroke.orientation) * stroke.dilation)
+										.rotate_about(stroke_angle.0, stroke_angle.1)
+										.dilate_about(stroke_dilation.0, stroke_dilation.1)
+										+ stroke_offset,
+									s,
+								)
+							}),
+						);
 						indices.extend([0, 2, 3, 0, 3, 1].map(|n| current_index + n));
 					}
 
@@ -448,8 +461,9 @@ impl Canvas {
 						}
 					}
 
-					vertices.extend(positions.into_iter().map(|position| Vertex {
+					vertices.extend(positions.into_iter().map(|(position, polarity)| Vertex {
 						position: [position[0], position[1]],
+						polarity,
 						color: BORDER_COLOR.map(srgb8_to_f32),
 					}));
 				}
@@ -459,12 +473,17 @@ impl Canvas {
 				let mut positions = vec![];
 				for ([a, b], p) in stroke.object.points.array_windows::<2>().zip(&perpendiculars) {
 					let current_index = stroke_index + u32::try_from(positions.len()).unwrap();
-					positions.extend([a.position + p * a.pressure, a.position - p * a.pressure, b.position + p * b.pressure, b.position - p * b.pressure].map(|x| {
-						(stroke.position + x.rotate(stroke.orientation) * stroke.dilation)
-							.rotate_about(stroke_angle.0, stroke_angle.1)
-							.dilate_about(stroke_dilation.0, stroke_dilation.1)
-							+ stroke_offset
-					}));
+					positions.extend(
+						[(a.position + p * a.pressure, 1.), (a.position - p * a.pressure, -1.), (b.position + p * b.pressure, 1.), (b.position - p * b.pressure, -1.)].map(|(x, s)| {
+							(
+								(stroke.position + x.rotate(stroke.orientation) * stroke.dilation)
+									.rotate_about(stroke_angle.0, stroke_angle.1)
+									.dilate_about(stroke_dilation.0, stroke_dilation.1)
+									+ stroke_offset,
+								s,
+							)
+						}),
+					);
 					indices.extend([0, 2, 3, 0, 3, 1].map(|n| current_index + n));
 				}
 
@@ -481,8 +500,9 @@ impl Canvas {
 					}
 				}
 
-				vertices.extend(positions.into_iter().map(|position| Vertex {
+				vertices.extend(positions.into_iter().map(|(position, polarity)| Vertex {
 					position: [position[0], position[1]],
+					polarity,
 					color: stroke.object.color.map(srgb8_to_f32),
 				}));
 			}
