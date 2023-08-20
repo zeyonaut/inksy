@@ -9,7 +9,7 @@ use enumset::EnumSet;
 
 use crate::{
 	app::{App, ClipboardContents, PreFullscreenState},
-	canvas::{Image, Object, Operation},
+	canvas::{Canvas, Image, Object, Operation},
 	clipboard::ClipboardData,
 	file::{load_canvas_from_file, save_canvas_to_file},
 	input::{
@@ -28,6 +28,7 @@ pub fn default_keymap() -> Keymap {
 	keymap.insert(Control | Shift, S, false, trigger(save_as_file));
 	keymap.insert(Control, S, false, trigger(save_file));
 	keymap.insert(Control, O, false, trigger(load_from_file));
+	keymap.insert(Control, N, false, trigger(new_file));
 	keymap.insert(NONE, B, false, trigger(choose_draw_tool));
 	keymap.insert(NONE, Backspace, false, trigger(delete_selected_items));
 	keymap.insert(Control | Shift, F, false, trigger(toggle_fullscreen));
@@ -68,6 +69,7 @@ fn save_as_file(app: &mut App) {
 	if let Some(file_path) = rfd::FileDialog::new().add_filter("Inksy", &["inksy"]).save_file() {
 		app.canvas.file_path = Some(file_path);
 		save_canvas_to_file(&app.canvas, &app.renderer).expect("Failed to save canvas.");
+		app.canvas.set_retraction_count_at_save();
 	}
 }
 
@@ -76,6 +78,7 @@ fn save_file(app: &mut App) {
 		save_as_file(app);
 	} else {
 		save_canvas_to_file(&app.canvas, &app.renderer).expect("Failed to save canvas.");
+		app.canvas.set_retraction_count_at_save();
 	}
 }
 
@@ -85,6 +88,12 @@ fn load_from_file(app: &mut App) {
 			app.canvas = canvas;
 		}
 	}
+	app.update_window_title();
+}
+
+fn new_file(app: &mut App) {
+	// TODO: Use a default background color, rather than inheriting the previous one.
+	app.canvas = Canvas::new(app.canvas.background_color);
 }
 
 fn discard_draft(app: &mut App) {

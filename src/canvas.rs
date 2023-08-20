@@ -171,6 +171,7 @@ pub struct Canvas {
 	retractions: Vec<Retraction>,
 	operations: Vec<Operation>,
 	pub textures: Vec<Texture>,
+	pub retraction_count_at_save: Option<usize>,
 }
 
 impl Canvas {
@@ -185,6 +186,7 @@ impl Canvas {
 			retractions: Vec::new(),
 			operations: Vec::new(),
 			textures: Vec::new(),
+			retraction_count_at_save: None,
 		}
 	}
 
@@ -199,6 +201,7 @@ impl Canvas {
 			retractions: Vec::new(),
 			operations: Vec::new(),
 			textures,
+			retraction_count_at_save: Some(0),
 		}
 	}
 
@@ -350,6 +353,11 @@ impl Canvas {
 	}
 
 	pub fn perform_operation(&mut self, operation: Operation) {
+		if let Some(retraction_count_at_save) = self.retraction_count_at_save {
+			if self.retractions.len() < retraction_count_at_save {
+				self.retraction_count_at_save = None;
+			}
+		}
 		self.operations.clear();
 		self.operations.push(operation);
 		self.redo();
@@ -376,6 +384,14 @@ impl Canvas {
 				stroke.is_selected = false;
 			}
 		}
+	}
+
+	pub fn set_retraction_count_at_save(&mut self) {
+		self.retraction_count_at_save = Some(self.retractions.len());
+	}
+
+	pub fn is_saved(&self) -> bool {
+		self.retraction_count_at_save.map_or(false, |x| x == self.retractions.len())
 	}
 
 	pub fn select_all(&mut self, is_selected: bool) {

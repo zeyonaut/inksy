@@ -31,6 +31,7 @@ use crate::{
 	render::{DrawCommand, Renderer},
 	tools::*,
 	utility::*,
+	APP_NAME_CAPITALIZED,
 };
 
 // TODO: Move this somewhere saner.
@@ -64,6 +65,7 @@ pub struct App {
 	pub tablet_context: Option<TabletContext>,
 	pub pressure: Option<f64>,
 	pub canvas: Canvas,
+	pub was_canvas_saved: bool,
 	pub mode_stack: ModeStack,
 	pub last_frame_instant: std::time::Instant,
 	pub input_monitor: InputMonitor,
@@ -127,6 +129,7 @@ impl App {
 			tablet_context,
 			pressure: None,
 			canvas: Canvas::new(HSV([0., 0., 0.07])),
+			was_canvas_saved: false,
 			mode_stack: ModeStack::new(Tool::Draw { current_stroke: None }),
 			last_frame_instant: Instant::now() - Duration::new(1, 0),
 			input_monitor: InputMonitor::new(),
@@ -139,6 +142,9 @@ impl App {
 
 	// Runs the event loop with the event handler.
 	pub fn run(mut self, event_loop: EventLoop<()>) {
+		// Update the window title.
+		self.update_window_title();
+
 		// Run the event loop.
 		event_loop.run(move |event, _, control_flow| self.handle_event(event, control_flow));
 	}
@@ -666,8 +672,29 @@ impl App {
 			},
 		}
 
+		if self.was_canvas_saved != self.canvas.is_saved() {
+			self.was_canvas_saved = !self.was_canvas_saved;
+			self.update_window_title();
+		}
+
 		// Reset inputs.
 		self.input_monitor.defresh();
+	}
+
+	pub fn update_window_title(&mut self) {
+		if self.was_canvas_saved {
+			self.window.set_title(&format!(
+				"{} - {}",
+				self.canvas.file_path.as_ref().and_then(|file_path| file_path.file_stem()).and_then(|s| s.to_str()).unwrap_or("[Untitled]"),
+				APP_NAME_CAPITALIZED
+			))
+		} else {
+			self.window.set_title(&format!(
+				"*{}  - {}",
+				self.canvas.file_path.as_ref().and_then(|file_path| file_path.file_stem()).and_then(|s| s.to_str()).unwrap_or("[Untitled]"),
+				APP_NAME_CAPITALIZED
+			))
+		}
 	}
 
 	fn update_renderer(&mut self) {
