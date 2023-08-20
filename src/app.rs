@@ -690,7 +690,7 @@ impl App {
 			))
 		} else {
 			self.window.set_title(&format!(
-				"*{}  - {}",
+				"*{} - {}",
 				self.canvas.file_path.as_ref().and_then(|file_path| file_path.file_stem()).and_then(|s| s.to_str()).unwrap_or("[Untitled]"),
 				APP_NAME_CAPITALIZED
 			))

@@ -7,7 +7,7 @@
 
 use std::{
 	fs::File,
-	io::{Read, Write},
+	io::{Read, Write, BufWriter, BufReader},
 	path::{Path, PathBuf},
 };
 
@@ -43,7 +43,7 @@ pub fn save_canvas_to_file(canvas: &Canvas, renderer: &Renderer) -> Option<()> {
 }
 
 fn save_canvas_to_file_inner(canvas: &Canvas, renderer: &Renderer, file_path: &Path) -> Option<()> {
-	let mut file = File::create(file_path).ok()?;
+	let mut file = BufWriter::new(File::create(file_path).ok()?);
 
 	file.write_all(&MAGIC_NUMBERS).ok()?;
 	file.write_all(&0u64.to_le_bytes()).ok()?;
@@ -137,7 +137,7 @@ fn save_canvas_to_file_inner(canvas: &Canvas, renderer: &Renderer, file_path: &P
 }
 
 pub fn load_canvas_from_file(renderer: &mut Renderer, file_path: PathBuf) -> Option<Canvas> {
-	let mut file = File::open(file_path.clone()).ok()?;
+	let mut file = BufReader::new(File::open(file_path.clone()).ok()?);
 
 	let mut magic_numbers = [0; 8];
 	file.read_exact(&mut magic_numbers).ok()?;
@@ -155,7 +155,7 @@ pub fn load_canvas_from_file(renderer: &mut Renderer, file_path: PathBuf) -> Opt
 	let [tilt, zoom] = read_f32s(&mut file)?;
 	let [stroke_count, image_count, texture_count] = read_u64s(&mut file)?;
 
-	let mut strokes = Vec::with_capacity(stroke_count as usize);
+	let mut strokes = Vec::with_capacity((stroke_count as usize).min(2048));
 	for _ in 0..stroke_count {
 		let position = read_f32s::<2>(&mut file)?;
 		let [orientation, dilation] = read_f32s(&mut file)?;
@@ -163,7 +163,7 @@ pub fn load_canvas_from_file(renderer: &mut Renderer, file_path: PathBuf) -> Opt
 		let [stroke_radius] = read_f32s(&mut file)?;
 		let [point_count] = read_u64s(&mut file)?;
 
-		let mut points = Vec::with_capacity(point_count as usize);
+		let mut points = Vec::with_capacity((point_count as usize).min(2048));
 		for _ in 0..point_count {
 			let position = read_f32s::<2>(&mut file)?;
 			let [pressure] = read_f32s(&mut file)?;
@@ -184,7 +184,7 @@ pub fn load_canvas_from_file(renderer: &mut Renderer, file_path: PathBuf) -> Opt
 		});
 	}
 
-	let mut images = Vec::with_capacity(image_count as usize);
+	let mut images = Vec::with_capacity((image_count as usize).min(128));
 	for _ in 0..image_count {
 		let position = read_f32s::<2>(&mut file)?;
 		let [orientation, dilation] = read_f32s(&mut file)?;
@@ -203,7 +203,7 @@ pub fn load_canvas_from_file(renderer: &mut Renderer, file_path: PathBuf) -> Opt
 		});
 	}
 
-	let mut textures = Vec::new();
+	let mut textures = Vec::with_capacity((texture_count as usize).min(128));
 	for _ in 0..texture_count {
 		let [width, height] = read_u32s(&mut file)?;
 		let mut buffer = vec![0; width as usize * 4 * height as usize];
