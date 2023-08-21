@@ -159,10 +159,15 @@ fn release_color_picker_tool(app: &mut App) {
 }
 
 fn delete_selected_items(app: &mut App) {
-	let selected_indices = app.canvas.strokes().iter().enumerate().filter_map(|(index, stroke)| if stroke.is_selected { Some(index) } else { None }).collect::<Vec<_>>();
+	let selected_image_indices = app.canvas.images().iter().enumerate().filter_map(|(index, image)| if image.is_selected { Some(index) } else { None }).collect::<Vec<_>>();
 
-	if !selected_indices.is_empty() {
-		app.canvas.perform_operation(Operation::DeleteStrokes { monotone_indices: selected_indices });
+	let selected_stroke_indices = app.canvas.strokes().iter().enumerate().filter_map(|(index, stroke)| if stroke.is_selected { Some(index) } else { None }).collect::<Vec<_>>();
+
+	if !selected_stroke_indices.is_empty() {
+		app.canvas.perform_operation(Operation::DeleteObjects {
+			monotone_image_indices: selected_image_indices,
+			monotone_stroke_indices: selected_stroke_indices,
+		});
 	}
 }
 
@@ -218,7 +223,27 @@ fn cut(app: &mut App) {
 	let cursor_virtual_position = (app.cursor_physical_position.s(app.scale).z(app.canvas.view.zoom) - semidimensions).rotate(-app.canvas.view.tilt);
 	let offset = cursor_virtual_position + app.canvas.view.position;
 
-	let (indices, strokes): (Vec<_>, Vec<_>) = app
+	let (image_indices, images): (Vec<_>, Vec<_>) = app
+		.canvas
+		.images()
+		.iter()
+		.enumerate()
+		.filter_map(|(index, image)| {
+			if image.is_selected {
+				Some((
+					index,
+					Object {
+						position: image.position - offset,
+						..image.clone()
+					},
+				))
+			} else {
+				None
+			}
+		})
+		.unzip();
+
+	let (stroke_indices, strokes): (Vec<_>, Vec<_>) = app
 		.canvas
 		.strokes()
 		.iter()
@@ -238,11 +263,14 @@ fn cut(app: &mut App) {
 		})
 		.unzip();
 
-	if !indices.is_empty() {
-		app.canvas.perform_operation(Operation::DeleteStrokes { monotone_indices: indices });
+	if !stroke_indices.is_empty() {
+		app.canvas.perform_operation(Operation::DeleteObjects {
+			monotone_image_indices: image_indices,
+			monotone_stroke_indices: stroke_indices,
+		});
 	}
 
-	app.clipboard_contents = Some(ClipboardContents::Subcanvas(strokes));
+	app.clipboard_contents = Some(ClipboardContents::Subcanvas(images, strokes));
 	app.clipboard.write(ClipboardData::Custom);
 }
 
@@ -250,6 +278,22 @@ fn copy(app: &mut App) {
 	let semidimensions = Vex([app.renderer.config.width as f32 / 2., app.renderer.config.height as f32 / 2.].map(Px)).s(app.scale).z(app.canvas.view.zoom);
 	let cursor_virtual_position = (app.cursor_physical_position.s(app.scale).z(app.canvas.view.zoom) - semidimensions).rotate(-app.canvas.view.tilt);
 	let offset = cursor_virtual_position + app.canvas.view.position;
+
+	let images: Vec<_> = app
+		.canvas
+		.images()
+		.iter()
+		.filter_map(|image| {
+			if image.is_selected {
+				Some(Object {
+					position: image.position - offset,
+					..image.clone()
+				})
+			} else {
+				None
+			}
+		})
+		.collect();
 
 	let strokes: Vec<_> = app
 		.canvas
@@ -267,20 +311,33 @@ fn copy(app: &mut App) {
 		})
 		.collect();
 
-	app.clipboard_contents = Some(ClipboardContents::Subcanvas(strokes));
+	app.clipboard_contents = Some(ClipboardContents::Subcanvas(images, strokes));
 	app.clipboard.write(ClipboardData::Custom);
 }
 
 fn paste(app: &mut App) {
 	match app.clipboard.read() {
 		Some(ClipboardData::Custom) => {
-			if let Some(ClipboardContents::Subcanvas(strokes)) = app.clipboard_contents.as_ref() {
+			if let Some(ClipboardContents::Subcanvas(images, strokes)) = app.clipboard_contents.as_ref() {
 				let semidimensions = Vex([app.renderer.config.width as f32 / 2., app.renderer.config.height as f32 / 2.].map(Px)).s(app.scale).z(app.canvas.view.zoom);
 				let cursor_virtual_position = (app.cursor_physical_position.s(app.scale).z(app.canvas.view.zoom) - semidimensions).rotate(-app.canvas.view.tilt);
 
 				app.canvas.select_all(false);
 
 				let offset = cursor_virtual_position + app.canvas.view.position;
+
+				if !images.is_empty() {
+					app.canvas.perform_operation(Operation::CommitImages {
+						images: images
+							.iter()
+							.map(|stroke| Object {
+								position: stroke.position + offset,
+								is_selected: true,
+								..stroke.clone()
+							})
+							.collect(),
+					})
+				}
 
 				if !strokes.is_empty() {
 					app.canvas.perform_operation(Operation::CommitStrokes {
@@ -299,8 +356,8 @@ fn paste(app: &mut App) {
 		Some(ClipboardData::Image { dimensions, data }) => {
 			let texture_index = app.canvas.push_texture(&app.renderer, dimensions, data);
 
-			app.canvas.perform_operation(Operation::PasteImage {
-				image: Object {
+			app.canvas.perform_operation(Operation::CommitImages {
+				images: vec![Object {
 					object: Image {
 						texture_index,
 						dimensions: Vex(dimensions.map(|x| Vx(x as f32))),
@@ -309,7 +366,7 @@ fn paste(app: &mut App) {
 					orientation: app.canvas.view.tilt,
 					dilation: 1.,
 					is_selected: false,
-				},
+				}],
 			});
 		},
 		_ => {},

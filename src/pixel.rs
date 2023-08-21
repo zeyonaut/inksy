@@ -292,6 +292,14 @@ fn map2_r0_r1<'a, 'b, const N: usize, A, B, U, F: FnMut(&'a A, &'b B) -> U>(l: &
 pub struct Vex<const N: usize, T>(pub [T; N]);
 
 impl<const N: usize, T> Vex<N, T> {
+	pub fn flip<const I: usize>(mut self) -> Vex<N, T>
+	where
+		T: Neg<Output = T> + Clone,
+	{
+		self.0[I] = -self.0[I].clone();
+		self
+	}
+
 	pub fn map<A, F: FnMut(T) -> A>(self, f: F) -> Vex<N, A> {
 		Vex(self.0.map(f))
 	}
@@ -343,9 +351,7 @@ impl<A> Vex<2, A> {
 	{
 		self.clone().cross(other.clone()).into().atan2(self.dot(other).into())
 	}
-}
 
-impl<A> Vex<2, A> {
 	pub fn rotate<B, C>(self, angle: f32) -> Vex<2, C>
 	where
 		A: Clone + Mul<f32, Output = B>,

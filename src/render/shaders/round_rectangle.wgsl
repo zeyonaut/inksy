@@ -27,7 +27,6 @@ struct ClipVertex {
 	@location(1) dimensions: vec2f,
 	@location(2) color: vec4f,
 	@location(3) radius: f32,
-	@location(4) instance_index: u32,
 }
 
 var<private> vertices: array<vec2f, 4> = array<vec2f, 4>(
@@ -38,7 +37,7 @@ var<private> vertices: array<vec2f, 4> = array<vec2f, 4>(
 );
 
 @vertex
-fn vs_main(instance: Instance, @builtin(vertex_index) index: u32, @builtin(instance_index) instance_index: u32) -> ClipVertex {
+fn vs_main(instance: Instance, @builtin(vertex_index) index: u32) -> ClipVertex {
 	var out: ClipVertex;
 	let position = instance.position;
 	out.position = vec4f((vertices[index] * (instance.dimensions + 4.) - 2. + position) / viewport.size * vec2f(2., -2.) + vec2f(-1., 1.), 0., 1.);
@@ -46,7 +45,6 @@ fn vs_main(instance: Instance, @builtin(vertex_index) index: u32, @builtin(insta
 	out.dimensions = instance.dimensions;
 	out.color = instance.color;
 	out.radius = instance.radius;
-	out.instance_index = instance_index;
 	return out;
 }
 

@@ -21,7 +21,7 @@ use crate::input::linux::*;
 use crate::input::wintab::*;
 use crate::{
 	actions::default_keymap,
-	canvas::{Canvas, IncompleteStroke, Object, Operation, Stroke},
+	canvas::{Canvas, Image, IncompleteStroke, Object, Operation, Stroke},
 	clipboard::Clipboard,
 	input::{
 		keymap::{execute_keymap, Keymap},
@@ -43,7 +43,7 @@ const OUTLINE_WIDTH: Lx = Lx(2.);
 const SATURATION_VALUE_WINDOW_DIAMETER: Lx = Lx(8.);
 
 pub enum ClipboardContents {
-	Subcanvas(Vec<Object<Stroke>>),
+	Subcanvas(Vec<Object<Image>>, Vec<Object<Stroke>>),
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -546,11 +546,14 @@ impl App {
 					if let Some(origin) = origin.take() {
 						let selection_offset = self.canvas.view.position + cursor_virtual_position - origin;
 
-						let selected_indices = self.canvas.strokes().iter().enumerate().filter_map(|(index, stroke)| if stroke.is_selected { Some(index) } else { None }).collect::<Vec<_>>();
+						let selected_image_indices = self.canvas.images().iter().enumerate().filter_map(|(index, image)| if image.is_selected { Some(index) } else { None }).collect::<Vec<_>>();
 
-						if !selected_indices.is_empty() {
-							self.canvas.perform_operation(Operation::TranslateStrokes {
-								indices: selected_indices,
+						let selected_stroke_indices = self.canvas.strokes().iter().enumerate().filter_map(|(index, stroke)| if stroke.is_selected { Some(index) } else { None }).collect::<Vec<_>>();
+
+						if !selected_image_indices.is_empty() || !selected_stroke_indices.is_empty() {
+							self.canvas.perform_operation(Operation::TranslateObjects {
+								image_indices: selected_image_indices,
+								stroke_indices: selected_stroke_indices,
 								vector: selection_offset,
 							});
 						}
@@ -565,15 +568,11 @@ impl App {
 				if self.input_monitor.active_buttons.contains(Left) {
 					if self.input_monitor.different_buttons.contains(Left) && origin.is_none() {
 						// Compute the centroid.
-						let (sum, selected_point_count) = self.canvas.strokes().iter().fold((Vex::ZERO, 0), |(sum, selected_point_count), stroke| {
-							if stroke.is_selected {
-								(sum + stroke.position * stroke.object.points.len() as f32, selected_point_count + stroke.object.points.len())
-							} else {
-								(sum, selected_point_count)
-							}
-						});
+						let (sum, count) = self.canvas.strokes().iter().fold((Vex::ZERO, 0), |(sum, count), stroke| if stroke.is_selected { (sum + stroke.position, count + 1) } else { (sum, count) });
 
-						let center = if selected_point_count > 0 { sum / selected_point_count as f32 } else { Vex::ZERO };
+						let (sum, count) = self.canvas.images().iter().fold((sum, count), |(sum, count), image| if image.is_selected { (sum + image.position, count + 1) } else { (sum, count) });
+
+						let center = if count > 0 { sum / count as f32 } else { Vex::ZERO };
 
 						*origin = Some({
 							RotateDraft {
@@ -587,10 +586,17 @@ impl App {
 						let selection_offset = self.canvas.view.position + cursor_virtual_position - center;
 						let angle = initial_position.angle_to(selection_offset);
 
-						let selected_indices = self.canvas.strokes().iter().enumerate().filter_map(|(index, stroke)| if stroke.is_selected { Some(index) } else { None }).collect::<Vec<_>>();
+						let selected_image_indices = self.canvas.images().iter().enumerate().filter_map(|(index, image)| if image.is_selected { Some(index) } else { None }).collect::<Vec<_>>();
 
-						if !selected_indices.is_empty() {
-							self.canvas.perform_operation(Operation::RotateStrokes { indices: selected_indices, center, angle });
+						let selected_stroke_indices = self.canvas.strokes().iter().enumerate().filter_map(|(index, stroke)| if stroke.is_selected { Some(index) } else { None }).collect::<Vec<_>>();
+
+						if !selected_image_indices.is_empty() || !selected_stroke_indices.is_empty() {
+							self.canvas.perform_operation(Operation::RotateObjects {
+								image_indices: selected_image_indices,
+								stroke_indices: selected_stroke_indices,
+								center,
+								angle,
+							});
 						}
 					}
 				}
@@ -603,15 +609,11 @@ impl App {
 				if self.input_monitor.active_buttons.contains(Left) {
 					if self.input_monitor.different_buttons.contains(Left) && origin.is_none() {
 						// Compute the centroid.
-						let (sum, selected_point_count) = self.canvas.strokes().iter().fold((Vex::ZERO, 0), |(sum, selected_point_count), stroke| {
-							if stroke.is_selected {
-								(sum + stroke.position * stroke.object.points.len() as f32, selected_point_count + stroke.object.points.len())
-							} else {
-								(sum, selected_point_count)
-							}
-						});
+						let (sum, count) = self.canvas.strokes().iter().fold((Vex::ZERO, 0), |(sum, count), stroke| if stroke.is_selected { (sum + stroke.position, count + 1) } else { (sum, count) });
 
-						let center = if selected_point_count > 0 { sum / selected_point_count as f32 } else { Vex::ZERO };
+						let (sum, count) = self.canvas.images().iter().fold((sum, count), |(sum, count), image| if image.is_selected { (sum + image.position, count + 1) } else { (sum, count) });
+
+						let center = if count > 0 { sum / count as f32 } else { Vex::ZERO };
 
 						*origin = Some({
 							ResizeDraft {
@@ -625,10 +627,17 @@ impl App {
 						let selection_distance = (self.canvas.view.position + cursor_virtual_position - center).norm();
 						let dilation = selection_distance / initial_distance;
 
-						let selected_indices = self.canvas.strokes().iter().enumerate().filter_map(|(index, stroke)| if stroke.is_selected { Some(index) } else { None }).collect::<Vec<_>>();
+						let selected_image_indices = self.canvas.images().iter().enumerate().filter_map(|(index, image)| if image.is_selected { Some(index) } else { None }).collect::<Vec<_>>();
 
-						if !selected_indices.is_empty() {
-							self.canvas.perform_operation(Operation::ResizeStrokes { indices: selected_indices, center, dilation });
+						let selected_stroke_indices = self.canvas.strokes().iter().enumerate().filter_map(|(index, stroke)| if stroke.is_selected { Some(index) } else { None }).collect::<Vec<_>>();
+
+						if !selected_image_indices.is_empty() || !selected_stroke_indices.is_empty() {
+							self.canvas.perform_operation(Operation::ResizeObjects {
+								image_indices: selected_image_indices,
+								stroke_indices: selected_stroke_indices,
+								center,
+								dilation,
+							});
 						}
 					}
 				}

@@ -7,7 +7,7 @@
 
 use std::{
 	fs::File,
-	io::{Read, Write, BufWriter, BufReader},
+	io::{BufReader, BufWriter, Read, Write},
 	path::{Path, PathBuf},
 };
 
