@@ -94,6 +94,7 @@ fn load_from_file(app: &mut App) {
 fn new_file(app: &mut App) {
 	// TODO: Use a default background color, rather than inheriting the previous one.
 	app.canvas = Canvas::new(app.canvas.background_color);
+	app.update_window_title();
 }
 
 fn discard_draft(app: &mut App) {

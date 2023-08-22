@@ -48,7 +48,7 @@ pub enum RenderCommand {
 
 // This struct stores the data of each vertex to be rendered.
 #[repr(C)]
-#[derive(Default, Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
+#[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct Vertex {
 	pub position: [Vx; 2],
 	pub polarity: f32,
@@ -69,7 +69,7 @@ pub struct ViewportUniform {
 }
 
 #[repr(C)]
-#[derive(Default, Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
+#[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 struct CanvasImageInstance {
 	pub position: [f32; 2],
 	pub orientation: f32,
@@ -84,7 +84,7 @@ impl InstanceAttributes<6> for CanvasImageInstance {
 }
 
 #[repr(C)]
-#[derive(Default, Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
+#[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct CardInstance {
 	pub position: [f32; 2],
 	pub dimensions: [f32; 2],
@@ -97,7 +97,7 @@ impl InstanceAttributes<4> for CardInstance {
 }
 
 #[repr(C)]
-#[derive(Default, Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
+#[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct ColorRingInstance {
 	pub position: [f32; 2],
 	pub radius_major: f32,
@@ -110,7 +110,7 @@ impl InstanceAttributes<4> for ColorRingInstance {
 }
 
 #[repr(C)]
-#[derive(Default, Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
+#[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct ColorTrigonInstance {
 	pub position: [f32; 2],
 	pub radius: f32,
@@ -406,11 +406,11 @@ impl Renderer {
 
 		let should_render_test_text = strokes_indices.is_empty() && canvas_image_instances.is_empty();
 
-		self.canvas_image_renderer.prepare(&self.device, &self.queue, canvas_image_instances);
-		self.trigon_renderer.prepare(&self.device, &self.queue, strokes_vertices, strokes_indices);
-		self.card_renderer.prepare(&self.device, &self.queue, card_instances);
-		self.color_ring_renderer.prepare(&self.device, &self.queue, color_ring_instances);
-		self.color_trigon_renderer.prepare(&self.device, &self.queue, color_trigon_instances);
+		self.canvas_image_renderer.prepare(&self.device, &self.queue, &canvas_image_instances);
+		self.trigon_renderer.prepare(&self.device, &self.queue, &strokes_vertices, &strokes_indices);
+		self.card_renderer.prepare(&self.device, &self.queue, &card_instances);
+		self.color_ring_renderer.prepare(&self.device, &self.queue, &color_ring_instances);
+		self.color_trigon_renderer.prepare(&self.device, &self.queue, &color_trigon_instances);
 
 		for texture in canvas.textures.iter_mut() {
 			texture.prepare(&self.queue);

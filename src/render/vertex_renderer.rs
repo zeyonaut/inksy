@@ -87,12 +87,12 @@ impl<Vertex> VertexRenderer<Vertex> {
 
 		Self { render_pipeline, vertex_buffer, index_buffer }
 	}
-	pub fn prepare(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, vertices: Vec<Vertex>, indices: Vec<u32>)
+	pub fn prepare(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, vertices: &[Vertex], indices: &[u32])
 	where
-		Vertex: bytemuck::Pod + Default,
+		Vertex: bytemuck::Pod,
 	{
-		self.vertex_buffer.write(device, queue, vertices, Default::default());
-		self.index_buffer.write(device, queue, indices, Default::default());
+		self.vertex_buffer.write(device, queue, 0, vertices);
+		self.index_buffer.write(device, queue, 0, indices);
 	}
 
 	pub fn render<'r>(&'r self, render_pass: &mut wgpu::RenderPass<'r>, index_range: Range<u32>) {

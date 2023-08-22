@@ -105,11 +105,11 @@ impl<Instance> InstanceRenderer<Instance> {
 		}
 	}
 
-	pub fn prepare(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, instances: Vec<Instance>)
+	pub fn prepare(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, instances: &[Instance])
 	where
-		Instance: bytemuck::Pod + Default,
+		Instance: bytemuck::Pod,
 	{
-		self.instance_buffer.write(device, queue, instances, Default::default());
+		self.instance_buffer.write(device, queue, 0, instances);
 	}
 
 	pub fn render<'r>(&'r self, render_pass: &mut wgpu::RenderPass<'r>, instance_range: Range<u32>) {
