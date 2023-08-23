@@ -367,6 +367,7 @@ fn paste(app: &mut App) {
 					orientation: app.canvas.view.tilt,
 					dilation: 1.,
 					is_selected: false,
+					is_dirty: true,
 				}],
 			});
 		},

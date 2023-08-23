@@ -6,9 +6,12 @@
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
 mod buffer;
+mod dynamic_storage_buffer;
 mod instance_renderer;
+pub mod stroke_renderer;
 pub mod texture;
 mod uniform_buffer;
+pub mod vertex_attributes;
 mod vertex_renderer;
 
 use std::{ops::Range, sync::Arc};
@@ -16,16 +19,10 @@ use std::{ops::Range, sync::Arc};
 use fast_srgb8::srgb8_to_f32;
 use pollster::FutureExt;
 use raw_window_handle::{HasRawDisplayHandle, HasRawWindowHandle};
-use wgpu::SurfaceTexture;
 
-use self::{
-	instance_renderer::{InstanceAttributes, InstanceRenderer},
-	texture::Texture,
-	uniform_buffer::UniformBuffer,
-	vertex_renderer::{VertexAttributes, VertexRenderer},
-};
+use self::{instance_renderer::InstanceRenderer, stroke_renderer::StrokeRenderer, texture::Texture, uniform_buffer::UniformBuffer, vertex_attributes::VertexAttributes, vertex_renderer::VertexRenderer};
 use crate::{
-	canvas::Canvas,
+	canvas::{Canvas, IncompleteStroke},
 	pixel::{Px, Vex, Vx},
 };
 
@@ -79,7 +76,7 @@ struct CanvasImageInstance {
 	pub sprite_dimensions: [f32; 2],
 }
 
-impl InstanceAttributes<6> for CanvasImageInstance {
+impl VertexAttributes<6> for CanvasImageInstance {
 	const ATTRIBUTES: [wgpu::VertexAttribute; 6] = wgpu::vertex_attr_array![0 => Float32x2, 1 => Float32, 2 => Float32, 3 => Float32x2, 4 => Float32x2, 5 => Float32x2];
 }
 
@@ -92,7 +89,7 @@ pub struct CardInstance {
 	pub radius: f32,
 }
 
-impl InstanceAttributes<4> for CardInstance {
+impl VertexAttributes<4> for CardInstance {
 	const ATTRIBUTES: [wgpu::VertexAttribute; 4] = wgpu::vertex_attr_array![0 => Float32x2, 1 => Float32x2, 2 => Float32x4, 3 => Float32];
 }
 
@@ -105,7 +102,7 @@ pub struct ColorRingInstance {
 	pub saturation_value: [f32; 2],
 }
 
-impl InstanceAttributes<4> for ColorRingInstance {
+impl VertexAttributes<4> for ColorRingInstance {
 	const ATTRIBUTES: [wgpu::VertexAttribute; 4] = wgpu::vertex_attr_array![0 => Float32x2, 1 => Float32, 2 => Float32, 3 => Float32x2];
 }
 
@@ -117,7 +114,7 @@ pub struct ColorTrigonInstance {
 	pub hue: f32,
 }
 
-impl InstanceAttributes<3> for ColorTrigonInstance {
+impl VertexAttributes<3> for ColorTrigonInstance {
 	const ATTRIBUTES: [wgpu::VertexAttribute; 3] = wgpu::vertex_attr_array![0 => Float32x2, 1 => Float32, 2 => Float32];
 }
 
@@ -136,6 +133,7 @@ pub struct Renderer {
 	text_atlas: glyphon::TextAtlas,
 	buffer: glyphon::Buffer,
 	swash_cache: glyphon::SwashCache,
+	stroke_renderer: StrokeRenderer,
 	trigon_renderer: VertexRenderer<Vertex>,
 	canvas_image_renderer: InstanceRenderer<CanvasImageInstance>,
 	card_renderer: InstanceRenderer<CardInstance>,
@@ -242,6 +240,7 @@ impl Renderer {
 
 		let sample_count = multisample_texture.as_ref().map_or_else(|| 1, |_| 4);
 
+		let stroke_renderer = StrokeRenderer::new(&device, config.format, include_str!("shaders/stroke_trigon.wgsl"), "vs_main", "fs_main", &viewport_buffer, sample_count);
 		let trigon_renderer = VertexRenderer::new(&device, config.format, include_str!("shaders/trigon.wgsl"), "vs_main", "fs_main", &viewport_buffer, sample_count);
 		let canvas_image_renderer = InstanceRenderer::new(
 			&device,
@@ -271,6 +270,7 @@ impl Renderer {
 			text_atlas,
 			buffer,
 			swash_cache,
+			stroke_renderer,
 			trigon_renderer,
 			canvas_image_renderer,
 			card_renderer,
@@ -307,7 +307,7 @@ impl Renderer {
 
 	pub fn update(&mut self) {}
 
-	pub fn render(&mut self, canvas: &mut Canvas, draw_commands: Vec<DrawCommand>) -> Result<(), wgpu::SurfaceError> {
+	pub fn render(&mut self, canvas: &mut Canvas, current_stroke: Option<&IncompleteStroke>, draw_commands: Vec<DrawCommand>) -> Result<(), wgpu::SurfaceError> {
 		if self.is_pending_resize || canvas.is_view_dirty {
 			// We write the new size to the viewport buffer.
 			self.viewport_buffer.write(
@@ -322,6 +322,8 @@ impl Renderer {
 			self.is_pending_resize = false;
 			canvas.is_view_dirty = false;
 		}
+
+		let stroke_trigon_index_range = self.stroke_renderer.prepare(&self.device, &self.queue, canvas, current_stroke);
 
 		// We compute the background color of the canvas.
 		let background_color = {
@@ -404,7 +406,7 @@ impl Renderer {
 			}
 		}
 
-		let should_render_test_text = strokes_indices.is_empty() && canvas_image_instances.is_empty();
+		let should_render_test_text = canvas.strokes.is_empty() && canvas.images.is_empty();
 
 		self.canvas_image_renderer.prepare(&self.device, &self.queue, &canvas_image_instances);
 		self.trigon_renderer.prepare(&self.device, &self.queue, &strokes_vertices, &strokes_indices);
@@ -480,6 +482,8 @@ impl Renderer {
 
 		self.viewport_buffer.activate(&mut render_pass, 0);
 
+		self.stroke_renderer.render(&mut render_pass, stroke_trigon_index_range);
+
 		for render_command in render_commands {
 			match render_command {
 				RenderCommand::Trimesh(index_range) => self.trigon_renderer.render(&mut render_pass, index_range),
@@ -503,7 +507,7 @@ impl Renderer {
 		Ok(())
 	}
 
-	pub fn clear(&self, clear_color: wgpu::Color) -> Result<SurfaceTexture, wgpu::SurfaceError> {
+	pub fn clear(&self, clear_color: wgpu::Color) -> Result<wgpu::SurfaceTexture, wgpu::SurfaceError> {
 		// Set up the surface texture we will later render to.
 		let output = self.surface.get_current_texture()?;
 		let view = output.texture.create_view(&wgpu::TextureViewDescriptor::default());

@@ -171,17 +171,7 @@ pub fn load_canvas_from_file(renderer: &mut Renderer, file_path: PathBuf) -> Opt
 			points.push(Point { position: Vex(position.map(Vx)), pressure })
 		}
 
-		strokes.push(Object {
-			object: Stroke {
-				color: SRGBA8(color),
-				stroke_radius: Vx(stroke_radius),
-				points,
-			},
-			position: Vex(position.map(Vx)),
-			orientation,
-			dilation,
-			is_selected: false,
-		});
+		strokes.push(Stroke::new(SRGBA8(color), Vx(stroke_radius), points, Vex(position.map(Vx)), orientation, dilation));
 	}
 
 	let mut images = Vec::with_capacity((image_count as usize).min(128));
@@ -200,6 +190,7 @@ pub fn load_canvas_from_file(renderer: &mut Renderer, file_path: PathBuf) -> Opt
 			orientation,
 			dilation,
 			is_selected: false,
+			is_dirty: true,
 		});
 	}
 

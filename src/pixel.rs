@@ -288,7 +288,7 @@ fn map2_r0_r1<'a, 'b, const N: usize, A, B, U, F: FnMut(&'a A, &'b B) -> U>(l: &
 }
 
 #[repr(transparent)]
-#[derive(Clone, Copy, derive_more::From, derive_more::Into, derive_more::Index, PartialEq, PartialOrd, Debug)]
+#[derive(Clone, Copy, derive_more::From, derive_more::Into, derive_more::Index, bytemuck::Zeroable, bytemuck::Pod, PartialEq, PartialOrd, Debug)]
 pub struct Vex<const N: usize, T>(pub [T; N]);
 
 impl<const N: usize, T> Vex<N, T> {

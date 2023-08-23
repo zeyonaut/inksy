@@ -7,23 +7,7 @@
 
 use std::{borrow::Cow, ops::Range};
 
-use super::{buffer::DynamicBuffer, uniform_buffer::UniformBuffer, ViewportUniform};
-
-pub trait VertexAttributes<const N: usize> {
-	const ATTRIBUTES: [wgpu::VertexAttribute; N];
-
-	// Returns the layout of buffers composed of instances of Self.
-	fn buffer_layout<'a>() -> wgpu::VertexBufferLayout<'a>
-	where
-		Self: Sized,
-	{
-		wgpu::VertexBufferLayout {
-			array_stride: std::mem::size_of::<Self>() as wgpu::BufferAddress,
-			step_mode: wgpu::VertexStepMode::Vertex,
-			attributes: &Self::ATTRIBUTES,
-		}
-	}
-}
+use super::{buffer::DynamicBuffer, uniform_buffer::UniformBuffer, vertex_attributes::VertexAttributes, ViewportUniform};
 
 pub struct VertexRenderer<Vertex> {
 	render_pipeline: wgpu::RenderPipeline,
@@ -53,7 +37,7 @@ impl<Vertex> VertexRenderer<Vertex> {
 			vertex: wgpu::VertexState {
 				module: &shader_module,
 				entry_point: vertex_main,
-				buffers: &[Vertex::buffer_layout()],
+				buffers: &[Vertex::buffer_layout(wgpu::VertexStepMode::Vertex)],
 			},
 			fragment: Some(wgpu::FragmentState {
 				module: &shader_module,

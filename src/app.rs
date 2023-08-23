@@ -28,7 +28,7 @@ use crate::{
 		Button, InputMonitor, Key,
 	},
 	pixel::{Lx, Px, Scale, Vex, Zero, Zoom},
-	render::{DrawCommand, Renderer},
+	render::{stroke_renderer::SelectionTransformation, DrawCommand, Renderer, Vertex},
 	tools::*,
 	utility::*,
 	APP_NAME_CAPITALIZED,
@@ -242,35 +242,103 @@ impl App {
 		let cursor_virtual_position = (self.cursor_physical_position.s(self.scale).z(self.canvas.view.zoom) - semidimensions).rotate(self.canvas.view.tilt);
 
 		// Draw brushstrokes and images.
-		let selection_offset = if let Tool::Move { origin: Some(origin) } = &self.mode_stack.base_mode {
-			Some(self.canvas.view.position + cursor_virtual_position - *origin)
-		} else {
-			None
-		};
-
-		let selection_angle = if let Tool::Rotate {
-			origin: Some(RotateDraft { center, initial_position }),
-		} = &self.mode_stack.base_mode
 		{
-			let selection_offset = self.canvas.view.position + cursor_virtual_position - center;
-			let angle = initial_position.angle_to(selection_offset);
-			Some((center.clone(), angle))
-		} else {
-			None
-		};
+			let mut overlay_vertices = vec![];
+			let mut overlay_indices = vec![];
 
-		let selection_dilation = if let Tool::Resize {
-			origin: Some(ResizeDraft { center, initial_distance }),
-		} = &self.mode_stack.base_mode
-		{
-			let selection_distance = (self.canvas.view.position + cursor_virtual_position - center).norm();
-			let dilation = selection_distance / initial_distance;
-			Some((center.clone(), dilation))
-		} else {
-			None
-		};
+			for image in self.canvas.images.iter() {
+				if !image.is_selected {
+					draw_commands.push(DrawCommand::Texture {
+						position: image.position,
+						orientation: image.orientation,
+						dilation: image.dilation,
+						dimensions: image.object.dimensions,
+						index: image.object.texture_index,
+					});
+				} else {
+					draw_commands.push(DrawCommand::Texture {
+						position: image
+							.position
+							.rotate_about(self.canvas.selection_transformation.center_of_transformation, self.canvas.selection_transformation.rotation)
+							.dilate_about(self.canvas.selection_transformation.center_of_transformation, self.canvas.selection_transformation.dilation)
+							+ self.canvas.selection_transformation.translation,
+						orientation: image.orientation + self.canvas.selection_transformation.rotation,
+						dilation: image.dilation * self.canvas.selection_transformation.dilation,
+						dimensions: image.object.dimensions,
+						index: image.object.texture_index,
+					});
 
-		self.canvas.bake(&mut draw_commands, self.mode_stack.current_stroke(), selection_offset, selection_angle, selection_dilation);
+					const OVERLAY_COLOR: [u8; 4] = [0x28, 0xc2, 0xff, 0x7f];
+					let base_index = overlay_vertices.len();
+					let semidimensions = image.object.dimensions * 0.5;
+					overlay_vertices.push(Vertex {
+						position: (image
+							.position
+							.rotate_about(self.canvas.selection_transformation.center_of_transformation, self.canvas.selection_transformation.rotation)
+							.dilate_about(self.canvas.selection_transformation.center_of_transformation, self.canvas.selection_transformation.dilation)
+							+ self.canvas.selection_transformation.translation)
+							.0,
+						polarity: 0.,
+						color: OVERLAY_COLOR.map(srgb8_to_f32),
+					});
+					overlay_vertices.extend(
+						[-semidimensions, semidimensions.flip::<1>(), semidimensions, semidimensions.flip::<0>()]
+							.map(|v| v.rotate(image.orientation) * image.dilation + image.position)
+							.map(|v| {
+								v.rotate_about(self.canvas.selection_transformation.center_of_transformation, self.canvas.selection_transformation.rotation)
+									.dilate_about(self.canvas.selection_transformation.center_of_transformation, self.canvas.selection_transformation.dilation)
+									+ self.canvas.selection_transformation.translation
+							})
+							.map(|v| Vertex {
+								position: v.0,
+								polarity: 1.,
+								color: OVERLAY_COLOR.map(srgb8_to_f32),
+							}),
+					);
+					overlay_indices.extend([0, 1, 2, 0, 2, 3, 0, 3, 4, 0, 4, 1].map(|n| n + base_index as u32));
+				}
+			}
+
+			draw_commands.push(DrawCommand::Trimesh {
+				vertices: overlay_vertices,
+				indices: overlay_indices,
+			});
+		}
+
+		match &self.mode_stack.base_mode {
+			Tool::Move { origin: Some(origin) } => {
+				self.canvas.selection_transformation = SelectionTransformation {
+					translation: self.canvas.view.position + cursor_virtual_position - *origin,
+					..Default::default()
+				};
+				self.canvas.is_selection_transformation_dirty = true;
+			},
+			Tool::Rotate {
+				origin: Some(RotateDraft { center, initial_position }),
+			} => {
+				let selection_offset = self.canvas.view.position + cursor_virtual_position - center;
+				let angle = initial_position.angle_to(selection_offset);
+				self.canvas.selection_transformation = SelectionTransformation {
+					center_of_transformation: *center,
+					rotation: angle,
+					..Default::default()
+				};
+				self.canvas.is_selection_transformation_dirty = true;
+			},
+			Tool::Resize {
+				origin: Some(ResizeDraft { center, initial_distance }),
+			} => {
+				let selection_distance = (self.canvas.view.position + cursor_virtual_position - center).norm();
+				let dilation = selection_distance / initial_distance;
+				self.canvas.selection_transformation = SelectionTransformation {
+					center_of_transformation: *center,
+					dilation,
+					..Default::default()
+				};
+				self.canvas.is_selection_transformation_dirty = true;
+			},
+			_ => {},
+		}
 
 		match &self.mode_stack.get() {
 			Tool::Select { origin: Some(origin) } => {
@@ -379,7 +447,7 @@ impl App {
 			_ => {},
 		}
 
-		self.renderer.render(&mut self.canvas, draw_commands)
+		self.renderer.render(&mut self.canvas, self.mode_stack.current_stroke(), draw_commands)
 	}
 
 	fn poll_tablet(&mut self) {
@@ -557,6 +625,9 @@ impl App {
 								vector: selection_offset,
 							});
 						}
+
+						self.canvas.selection_transformation = Default::default();
+						self.canvas.is_selection_transformation_dirty = true;
 					}
 				}
 			},
@@ -598,6 +669,9 @@ impl App {
 								angle,
 							});
 						}
+
+						self.canvas.selection_transformation = Default::default();
+						self.canvas.is_selection_transformation_dirty = true;
 					}
 				}
 			},
@@ -639,6 +713,9 @@ impl App {
 								dilation,
 							});
 						}
+
+						self.canvas.selection_transformation = Default::default();
+						self.canvas.is_selection_transformation_dirty = true;
 					}
 				}
 			},

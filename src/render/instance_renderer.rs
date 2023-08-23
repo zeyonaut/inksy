@@ -9,23 +9,7 @@ use std::{borrow::Cow, ops::Range};
 
 use wgpu::util::DeviceExt;
 
-use super::buffer::DynamicBuffer;
-
-// NOTE: Ideally, the N should be an associated constant and not a parameter, but that isn't possible right now.
-pub trait InstanceAttributes<const N: usize> {
-	const ATTRIBUTES: [wgpu::VertexAttribute; N];
-
-	fn buffer_layout<'a>() -> wgpu::VertexBufferLayout<'a>
-	where
-		Self: Sized,
-	{
-		wgpu::VertexBufferLayout {
-			array_stride: std::mem::size_of::<Self>() as wgpu::BufferAddress,
-			step_mode: wgpu::VertexStepMode::Instance,
-			attributes: &Self::ATTRIBUTES,
-		}
-	}
-}
+use super::{buffer::DynamicBuffer, vertex_attributes::VertexAttributes};
 
 pub struct InstanceRenderer<Instance> {
 	render_pipeline: wgpu::RenderPipeline,
@@ -37,7 +21,7 @@ pub struct InstanceRenderer<Instance> {
 impl<Instance> InstanceRenderer<Instance> {
 	pub fn new<'a, const N: usize>(device: &wgpu::Device, texture_format: wgpu::TextureFormat, shader_source: impl Into<Cow<'a, str>>, vertex_main: &str, fragment_main: &str, bind_group_layouts: &[&wgpu::BindGroupLayout], sample_count: u32) -> Self
 	where
-		Instance: InstanceAttributes<N>,
+		Instance: VertexAttributes<N>,
 	{
 		let shader_module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
 			label: None,
@@ -56,7 +40,7 @@ impl<Instance> InstanceRenderer<Instance> {
 			vertex: wgpu::VertexState {
 				module: &shader_module,
 				entry_point: vertex_main,
-				buffers: &[Instance::buffer_layout()],
+				buffers: &[Instance::buffer_layout(wgpu::VertexStepMode::Instance)],
 			},
 			fragment: Some(wgpu::FragmentState {
 				module: &shader_module,

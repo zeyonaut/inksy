@@ -7,11 +7,9 @@
 
 use std::path::PathBuf;
 
-use fast_srgb8::srgb8_to_f32;
-
 use crate::{
 	pixel::{Vex, Vx, Vx2, Zero, Zoom},
-	render::{texture::Texture, DrawCommand, Renderer, Vertex},
+	render::{stroke_renderer::SelectionTransformation, texture::Texture, Renderer},
 	utility::{HSV, SRGBA8},
 };
 
@@ -32,6 +30,90 @@ pub struct Stroke {
 	pub color: SRGBA8,
 	pub stroke_radius: Vx,
 	pub points: Vec<Point>,
+	pub vertices: Vec<(Vex<2, Vx>, f32)>,
+	pub relative_indices: Vec<u32>,
+}
+
+impl Stroke {
+	pub fn new(color: SRGBA8, stroke_radius: Vx, points: Vec<Point>, position: Vex<2, Vx>, orientation: f32, dilation: f32) -> Object<Self> {
+		let (vertices, relative_indices) = Self::compute_geometry(&points, stroke_radius);
+
+		Object {
+			object: Stroke {
+				color,
+				stroke_radius,
+				points,
+				vertices,
+				relative_indices,
+			},
+			position,
+			orientation,
+			dilation,
+			is_selected: false,
+			is_dirty: true,
+		}
+	}
+
+	fn compute_geometry(points: &[Point], stroke_radius: Vx) -> (Vec<(Vex<2, Vx>, f32)>, Vec<u32>) {
+		if let [point] = points {
+			let heptagonal_vertices = {
+				use std::f32::consts::PI;
+				let i = Vex([point.pressure * stroke_radius, Vx(0.)]);
+				vec![
+					(Vex::ZERO, 0.),
+					(i, 1.),
+					(i.rotate(2. * PI * 1. / 7.), 1.),
+					(i.rotate(2. * PI * 2. / 7.), 1.),
+					(i.rotate(2. * PI * 3. / 7.), 1.),
+					(i.rotate(2. * PI * 4. / 7.), 1.),
+					(i.rotate(2. * PI * 5. / 7.), 1.),
+					(i.rotate(2. * PI * 6. / 7.), 1.),
+				]
+			};
+
+			let heptagonal_indices = vec![0, 1, 2, 0, 2, 3, 0, 3, 4, 0, 4, 5, 0, 5, 6, 0, 6, 7, 0, 7, 1];
+
+			(heptagonal_vertices, heptagonal_indices)
+		} else {
+			let mut vertices = vec![];
+			let mut indices = vec![];
+
+			// We compute the four bounding vertices of each line segment.
+			for [a, b] in points.array_windows::<2>() {
+				// We compute a unit normal.
+				let perpendicular = {
+					let forward = b.position - a.position;
+					Vex([forward[1], -forward[0]]).normalized() * STROKE_RADIUS
+				};
+
+				let current_index = u32::try_from(vertices.len()).unwrap();
+				vertices.extend([
+					(a.position + perpendicular * a.pressure, 1.),
+					(a.position - perpendicular * a.pressure, -1.),
+					(b.position + perpendicular * b.pressure, 1.),
+					(b.position - perpendicular * b.pressure, -1.),
+				]);
+				indices.extend([0, 2, 3, 0, 3, 1].map(|n| current_index + n));
+			}
+
+			for (i, [a, b, c]) in points.array_windows::<3>().enumerate() {
+				let p = b.position - a.position;
+				let q = c.position - b.position;
+				let i = u32::try_from(i).unwrap();
+				let cross_product = p.cross(q);
+
+				if cross_product > Vx2(0.) {
+					/* Clockwise */
+					indices.extend([2, 4 + 0, 4 + 1].map(|n| n + i * 4));
+				} else if cross_product < Vx2(0.) {
+					/* Counterclockwise */
+					indices.extend([3, 4 + 1, 4 + 0].map(|n| n + i * 4));
+				}
+			}
+
+			(vertices, indices)
+		}
+	}
 }
 
 #[derive(Clone)]
@@ -83,17 +165,7 @@ impl IncompleteStroke {
 			self.points[0].pressure = self.max_pressure;
 		}
 
-		Object {
-			object: Stroke {
-				color: self.color,
-				stroke_radius: STROKE_RADIUS,
-				points: self.points,
-			},
-			position: self.position + local_centroid,
-			orientation: 0.,
-			dilation: 1.,
-			is_selected: false,
-		}
+		Stroke::new(self.color, STROKE_RADIUS, self.points, self.position + local_centroid, 0., 1.)
 	}
 
 	pub fn preview(&self) -> Object<Stroke> {
@@ -103,17 +175,7 @@ impl IncompleteStroke {
 			points[0].pressure = self.max_pressure;
 		}
 
-		Object {
-			object: Stroke {
-				color: self.color,
-				stroke_radius: STROKE_RADIUS,
-				points,
-			},
-			position: self.position,
-			orientation: 0.,
-			dilation: 1.,
-			is_selected: false,
-		}
+		Stroke::new(self.color, STROKE_RADIUS, self.points.clone(), self.position, 0., 1.)
 	}
 }
 
@@ -167,6 +229,8 @@ pub struct Object<T> {
 	// Dilation about the local origin.
 	pub dilation: f32,
 	pub is_selected: bool,
+	// Tracks whether position/orientation/dilation, is_selected, or color has been invalidated.
+	pub is_dirty: bool,
 }
 
 pub struct View {
@@ -192,6 +256,10 @@ pub struct Canvas {
 	operations: Vec<Operation>,
 	pub textures: Vec<Texture>,
 	pub retraction_count_at_save: Option<usize>,
+	// Tracks the smallest index of a stroke with invalidated geometry.
+	pub base_dirty_stroke_index: usize,
+	pub selection_transformation: SelectionTransformation,
+	pub is_selection_transformation_dirty: bool,
 }
 
 impl Canvas {
@@ -207,6 +275,9 @@ impl Canvas {
 			operations: Vec::new(),
 			textures: Vec::new(),
 			retraction_count_at_save: None,
+			base_dirty_stroke_index: 0,
+			selection_transformation: Default::default(),
+			is_selection_transformation_dirty: true,
 		}
 	}
 
@@ -222,6 +293,9 @@ impl Canvas {
 			operations: Vec::new(),
 			textures,
 			retraction_count_at_save: Some(0),
+			base_dirty_stroke_index: 0,
+			selection_transformation: Default::default(),
+			is_selection_transformation_dirty: true,
 		}
 	}
 
@@ -266,6 +340,10 @@ impl Canvas {
 						antitone_index_stroke_pairs.push((index, stroke));
 					}
 
+					if let Some(index) = monotone_stroke_indices.first() {
+						self.base_dirty_stroke_index = self.base_dirty_stroke_index.min(*index);
+					}
+
 					Retraction::DeleteObjects {
 						antitone_index_image_pairs,
 						antitone_index_stroke_pairs,
@@ -278,6 +356,7 @@ impl Canvas {
 						if let Some(stroke) = self.strokes.get_mut(index) {
 							index_color_pairs.push((index, stroke.object.color));
 							stroke.object.color = new_color;
+							stroke.is_dirty = true;
 						}
 					}
 
@@ -293,6 +372,7 @@ impl Canvas {
 					for index in stroke_indices.iter().copied() {
 						if let Some(object) = self.strokes.get_mut(index) {
 							object.position = object.position + vector;
+							object.is_dirty = true;
 						}
 					}
 
@@ -310,6 +390,7 @@ impl Canvas {
 						if let Some(object) = self.strokes.get_mut(index) {
 							object.position = object.position.rotate_about(center, angle);
 							object.orientation += angle;
+							object.is_dirty = true;
 						}
 					}
 
@@ -327,6 +408,7 @@ impl Canvas {
 						if let Some(object) = self.strokes.get_mut(index) {
 							object.position = object.position.dilate_about(center, dilation);
 							object.dilation *= dilation;
+							object.is_dirty = true;
 						}
 					}
 
@@ -347,6 +429,8 @@ impl Canvas {
 					for _ in 0..length {
 						strokes.push(self.strokes.pop().unwrap());
 					}
+
+					self.base_dirty_stroke_index = self.base_dirty_stroke_index.min(self.strokes.len());
 
 					Operation::CommitStrokes { strokes }
 				},
@@ -380,6 +464,10 @@ impl Canvas {
 						monotone_stroke_indices.push(index);
 					}
 
+					if let Some(index) = monotone_stroke_indices.first() {
+						self.base_dirty_stroke_index = self.base_dirty_stroke_index.min(*index);
+					}
+
 					Operation::DeleteObjects { monotone_image_indices, monotone_stroke_indices }
 				},
 				RecolorStrokes { index_color_pairs, new_color } => {
@@ -388,6 +476,7 @@ impl Canvas {
 					for (index, old_color) in index_color_pairs.into_iter() {
 						if let Some(stroke) = self.strokes.get_mut(index) {
 							stroke.object.color = old_color;
+							stroke.is_dirty = true;
 						}
 
 						indices.push(index);
@@ -405,6 +494,7 @@ impl Canvas {
 					for index in stroke_indices.iter().copied() {
 						if let Some(stroke) = self.strokes.get_mut(index) {
 							stroke.position = stroke.position - vector;
+							stroke.is_dirty = true;
 						}
 					}
 
@@ -422,6 +512,7 @@ impl Canvas {
 						if let Some(object) = self.strokes.get_mut(index) {
 							object.position = object.position.rotate_about(center, -angle);
 							object.orientation -= angle;
+							object.is_dirty = true;
 						}
 					}
 
@@ -439,6 +530,7 @@ impl Canvas {
 						if let Some(object) = self.strokes.get_mut(index) {
 							object.position = object.position.dilate_about(center, 1. / dilation);
 							object.dilation /= dilation;
+							object.is_dirty = true;
 						}
 					}
 
@@ -510,6 +602,7 @@ impl Canvas {
 					let point_position = (stroke.position + point.position.rotate(stroke.orientation) * stroke.dilation - screen_center).rotate(-tilt);
 					if point_position[0] >= min[0] && point_position[1] >= min[1] && point_position[0] <= max[0] && point_position[1] <= max[1] {
 						stroke.is_selected = !stroke.is_selected;
+						stroke.is_dirty = true;
 						continue 'strokes;
 					}
 				}
@@ -517,11 +610,17 @@ impl Canvas {
 				for point in stroke.object.points.iter() {
 					let point_position = (stroke.position + point.position.rotate(stroke.orientation) * stroke.dilation - screen_center).rotate(-tilt);
 					if point_position[0] >= min[0] && point_position[1] >= min[1] && point_position[0] <= max[0] && point_position[1] <= max[1] {
-						stroke.is_selected = true;
+						if stroke.is_selected == false {
+							stroke.is_selected = true;
+							stroke.is_dirty = true;
+						}
 						continue 'strokes;
 					}
 				}
-				stroke.is_selected = false;
+				if stroke.is_selected == true {
+					stroke.is_selected = false;
+					stroke.is_dirty = true;
+				}
 			}
 		}
 	}
@@ -541,166 +640,9 @@ impl Canvas {
 
 		for stroke in self.strokes.iter_mut() {
 			stroke.is_selected = is_selected;
+			// Inefficient, but it'll work.
+			stroke.is_dirty = true;
 		}
-	}
-
-	pub fn bake(&self, draw_commands: &mut Vec<DrawCommand>, current_stroke: Option<&IncompleteStroke>, selection_offset: Option<Vex<2, Vx>>, selection_angle: Option<(Vex<2, Vx>, f32)>, selection_dilation: Option<(Vex<2, Vx>, f32)>) {
-		const OVERLAY_COLOR: [u8; 4] = [0x28, 0xc2, 0xff, 0x7f];
-		const BORDER_COLOR: [u8; 4] = [0x28, 0xc2, 0xff, 0xff];
-
-		let mut background_vertices = vec![];
-		let mut background_indices = vec![];
-
-		let mut vertices = vec![];
-		let mut indices = vec![];
-
-		let mut overlay_vertices = vec![];
-		let mut overlay_indices = vec![];
-
-		for image in self.images.iter() {
-			let stroke_offset = if image.is_selected { selection_offset.unwrap_or(Vex::ZERO) } else { Vex::ZERO };
-			let stroke_angle = if image.is_selected { selection_angle.unwrap_or((Vex::ZERO, 0.)) } else { (Vex::ZERO, 0.) };
-			let stroke_dilation = if image.is_selected { selection_dilation.unwrap_or((Vex::ZERO, 1.)) } else { (Vex::ZERO, 1.) };
-
-			draw_commands.push(DrawCommand::Texture {
-				position: image.position.rotate_about(stroke_angle.0, stroke_angle.1).dilate_about(stroke_dilation.0, stroke_dilation.1) + stroke_offset,
-				orientation: image.orientation + stroke_angle.1,
-				dilation: image.dilation * stroke_dilation.1,
-				dimensions: image.object.dimensions,
-				index: image.object.texture_index,
-			});
-
-			if image.is_selected {
-				let base_index = overlay_vertices.len();
-				let semidimensions = image.object.dimensions * 0.5;
-				overlay_vertices.push(Vertex {
-					position: (image.position.rotate_about(stroke_angle.0, stroke_angle.1).dilate_about(stroke_dilation.0, stroke_dilation.1) + stroke_offset).0,
-					polarity: 0.,
-					color: OVERLAY_COLOR.map(srgb8_to_f32),
-				});
-				overlay_vertices.extend(
-					[-semidimensions, semidimensions.flip::<1>(), semidimensions, semidimensions.flip::<0>()]
-						.map(|v| v.rotate(image.orientation) * image.dilation + image.position)
-						.map(|v| v.rotate_about(stroke_angle.0, stroke_angle.1).dilate_about(stroke_dilation.0, stroke_dilation.1) + stroke_offset)
-						.map(|v| Vertex {
-							position: v.0,
-							polarity: 1.,
-							color: OVERLAY_COLOR.map(srgb8_to_f32),
-						}),
-				);
-				overlay_indices.extend([0, 1, 2, 0, 2, 3, 0, 3, 4, 0, 4, 1].map(|n| n + base_index as u32));
-			}
-		}
-
-		for (stroke, is_current) in self.strokes.iter().zip(std::iter::repeat(false)).chain(current_stroke.map(|x| x.preview()).iter().map(|stroke| (stroke, true))) {
-			let stroke_offset = if stroke.is_selected { selection_offset.unwrap_or(Vex::ZERO) } else { Vex::ZERO };
-			let stroke_angle = if stroke.is_selected { selection_angle.unwrap_or((Vex::ZERO, 0.)) } else { (Vex::ZERO, 0.) };
-			let stroke_dilation = if stroke.is_selected { selection_dilation.unwrap_or((Vex::ZERO, 1.)) } else { (Vex::ZERO, 1.) };
-
-			if stroke.object.points.len() == 1 && !is_current {
-				if stroke.is_selected {
-					Self::draw_dot(&mut background_vertices, &mut background_indices, &stroke, STROKE_RADIUS, 1., BORDER_COLOR, stroke_offset, stroke_angle, stroke_dilation);
-				}
-				Self::draw_dot(&mut vertices, &mut indices, &stroke, STROKE_RADIUS, 0., stroke.object.color.0, stroke_offset, stroke_angle, stroke_dilation);
-			} else {
-				let perpendiculars = stroke
-					.object
-					.points
-					.array_windows::<2>()
-					.map(|[a, b]| {
-						let forward = b.position - a.position;
-						Vex([forward[1], -forward[0]]).normalized() * STROKE_RADIUS
-					})
-					.collect::<Vec<_>>();
-
-				if stroke.is_selected {
-					Self::draw_stroke(&mut background_vertices, &mut background_indices, &perpendiculars, &stroke, 1., BORDER_COLOR, stroke_offset, stroke_angle, stroke_dilation);
-				}
-
-				Self::draw_stroke(&mut vertices, &mut indices, &perpendiculars, &stroke, 0., stroke.object.color.0, stroke_offset, stroke_angle, stroke_dilation);
-			}
-		}
-
-		draw_commands.push(DrawCommand::Trimesh {
-			vertices: background_vertices,
-			indices: background_indices,
-		});
-		draw_commands.push(DrawCommand::Trimesh { vertices, indices });
-		draw_commands.push(DrawCommand::Trimesh {
-			vertices: overlay_vertices,
-			indices: overlay_indices,
-		});
-	}
-
-	// PRECONDITION: stroke.object.points is inhabited.
-	// TODO: Remove precondition?
-	fn draw_dot(vertices: &mut Vec<Vertex>, indices: &mut Vec<u32>, stroke: &Object<Stroke>, radius: Vx, extra: f32, color: [u8; 4], offset: Vex<2, Vx>, angle: (Vex<2, Vx>, f32), dilation: (Vex<2, Vx>, f32)) {
-		let point = stroke.object.points.first().unwrap();
-		fn heptagonal_vertices() -> [(Vex<2, f32>, f32); 8] {
-			use std::f32::consts::PI;
-			let i = Vex([1., 0.]);
-			[
-				(Vex::ZERO, 0.),
-				(i, 1.),
-				(i.rotate(2. * PI * 1. / 7.), 1.),
-				(i.rotate(2. * PI * 2. / 7.), 1.),
-				(i.rotate(2. * PI * 3. / 7.), 1.),
-				(i.rotate(2. * PI * 4. / 7.), 1.),
-				(i.rotate(2. * PI * 5. / 7.), 1.),
-				(i.rotate(2. * PI * 6. / 7.), 1.),
-			]
-		}
-		let stroke_index = u32::try_from(vertices.len()).unwrap();
-		let heptagonal_vertices = heptagonal_vertices().map(|(v, s)| {
-			(
-				(stroke.position + point.position.rotate(stroke.orientation) * stroke.dilation).rotate_about(angle.0, angle.1).dilate_about(dilation.0, dilation.1) + offset + v * ((point.pressure + extra) * stroke.dilation * dilation.1 * radius),
-				s,
-			)
-		});
-		vertices.extend(heptagonal_vertices.map(|(position, polarity)| Vertex {
-			position: [position[0], position[1]],
-			polarity,
-			color: color.map(srgb8_to_f32),
-		}));
-		indices.extend([0, 1, 2, 0, 2, 3, 0, 3, 4, 0, 4, 5, 0, 5, 6, 0, 6, 7, 0, 7, 1].map(|n| stroke_index + n));
-	}
-
-	fn draw_stroke(vertices: &mut Vec<Vertex>, indices: &mut Vec<u32>, perpendiculars: &Vec<Vex<2, Vx>>, stroke: &Object<Stroke>, extra: f32, color: [u8; 4], offset: Vex<2, Vx>, angle: (Vex<2, Vx>, f32), dilation: (Vex<2, Vx>, f32)) {
-		let stroke_index = u32::try_from(vertices.len()).unwrap();
-
-		let mut positions = vec![];
-		for ([a, b], p) in stroke.object.points.array_windows::<2>().zip(perpendiculars.iter()) {
-			let current_index = stroke_index + u32::try_from(positions.len()).unwrap();
-			positions.extend(
-				[
-					(a.position + p * (a.pressure + extra), 1.),
-					(a.position - p * (a.pressure + extra), -1.),
-					(b.position + p * (b.pressure + extra), 1.),
-					(b.position - p * (b.pressure + extra), -1.),
-				]
-				.map(|(x, s)| ((stroke.position + x.rotate(stroke.orientation) * stroke.dilation).rotate_about(angle.0, angle.1).dilate_about(dilation.0, dilation.1) + offset, s)),
-			);
-			indices.extend([0, 2, 3, 0, 3, 1].map(|n| current_index + n));
-		}
-
-		for (i, [p, q]) in perpendiculars.array_windows::<2>().enumerate() {
-			let i = u32::try_from(i).unwrap();
-			let cross_product = p.cross(*q);
-
-			if cross_product > Vx2(0.) {
-				/* Clockwise */
-				indices.extend([2, 4 + 0, 4 + 1].map(|n| stroke_index + n + i * 4));
-			} else if cross_product < Vx2(0.) {
-				/* Counterclockwise */
-				indices.extend([3, 4 + 1, 4 + 0].map(|n| stroke_index + n + i * 4));
-			}
-		}
-
-		vertices.extend(positions.into_iter().map(|(position, polarity)| Vertex {
-			position: [position[0], position[1]],
-			polarity,
-			color: color.map(srgb8_to_f32),
-		}));
 	}
 
 	pub fn push_texture(&mut self, renderer: &Renderer, dimensions: [u32; 2], image: Vec<u8>) -> usize {
