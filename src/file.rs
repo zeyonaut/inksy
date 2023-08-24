@@ -13,9 +13,8 @@ use std::{
 
 use crate::{
 	canvas::{Canvas, Image, Object, Point, Stroke, View},
-	pixel::{Vex, Vx, Zoom},
 	render::Renderer,
-	utility::{HSV, SRGBA8},
+	utility::{Vex, Vx, Zoom, HSV, SRGBA8},
 };
 
 const MAGIC_NUMBERS: [u8; 8] = [b'I', b'N', b'K', b'S', b'Y', 0, 0, 0];
@@ -71,9 +70,9 @@ fn save_canvas_to_file_inner(canvas: &Canvas, renderer: &Renderer, file_path: &P
 		let position: [f32; 2] = [stroke.position[0].0, stroke.position[1].0];
 		let orientation: f32 = stroke.orientation;
 		let dilation: f32 = stroke.dilation;
-		let color: [u8; 4] = stroke.object.color.0;
-		let stroke_radius: f32 = stroke.object.stroke_radius.0;
-		let point_count: u64 = u64::try_from(stroke.object.points.len()).ok()?;
+		let color: [u8; 4] = stroke.color.0;
+		let stroke_radius: f32 = stroke.stroke_radius.0;
+		let point_count: u64 = u64::try_from(stroke.points.len()).ok()?;
 
 		file.write_all(&position[0].to_le_bytes()).ok()?;
 		file.write_all(&position[1].to_le_bytes()).ok()?;
@@ -83,7 +82,7 @@ fn save_canvas_to_file_inner(canvas: &Canvas, renderer: &Renderer, file_path: &P
 		file.write_all(&stroke_radius.to_le_bytes()).ok()?;
 		file.write_all(&point_count.to_le_bytes()).ok()?;
 
-		for point in stroke.object.points.iter() {
+		for point in stroke.points.iter() {
 			let position: [f32; 2] = [point.position[0].0, point.position[1].0];
 			let pressure: f32 = point.pressure;
 
@@ -171,7 +170,7 @@ pub fn load_canvas_from_file(renderer: &mut Renderer, file_path: PathBuf) -> Opt
 			points.push(Point { position: Vex(position.map(Vx)), pressure })
 		}
 
-		strokes.push(Stroke::new(SRGBA8(color), Vx(stroke_radius), points, Vex(position.map(Vx)), orientation, dilation));
+		strokes.push(Stroke::new(SRGBA8(color), Vx(stroke_radius), points, Vex(position.map(Vx)), orientation, dilation).into());
 	}
 
 	let mut images = Vec::with_capacity((image_count as usize).min(128));
@@ -190,7 +189,6 @@ pub fn load_canvas_from_file(renderer: &mut Renderer, file_path: PathBuf) -> Opt
 			orientation,
 			dilation,
 			is_selected: false,
-			is_dirty: true,
 		});
 	}
 

@@ -23,7 +23,7 @@ use raw_window_handle::{HasRawDisplayHandle, HasRawWindowHandle};
 use self::{instance_renderer::InstanceRenderer, stroke_renderer::StrokeRenderer, texture::Texture, uniform_buffer::UniformBuffer, vertex_attributes::VertexAttributes, vertex_renderer::VertexRenderer};
 use crate::{
 	canvas::{Canvas, IncompleteStroke},
-	pixel::{Px, Vex, Vx},
+	utility::{Px, Vex, Vx},
 };
 
 const SHOULD_MULTISAMPLE: bool = false;
@@ -308,19 +308,18 @@ impl Renderer {
 	pub fn update(&mut self) {}
 
 	pub fn render(&mut self, canvas: &mut Canvas, current_stroke: Option<&IncompleteStroke>, draw_commands: Vec<DrawCommand>) -> Result<(), wgpu::SurfaceError> {
-		if self.is_pending_resize || canvas.is_view_dirty {
+		if let Some(view) = canvas.view.read_if_with_is_dirty(|is_dirty| is_dirty || self.is_pending_resize) {
 			// We write the new size to the viewport buffer.
 			self.viewport_buffer.write(
 				&self.queue,
 				ViewportUniform {
-					position: canvas.view.position.0.map(Into::into),
+					position: view.position.0.map(Into::into),
 					size: [self.config.width as f32, self.config.height as f32],
-					scale: canvas.view.zoom.0 * self.scale_factor,
-					tilt: canvas.view.tilt,
+					scale: view.zoom.0 * self.scale_factor,
+					tilt: view.tilt,
 				},
 			);
 			self.is_pending_resize = false;
-			canvas.is_view_dirty = false;
 		}
 
 		let stroke_trigon_index_range = self.stroke_renderer.prepare(&self.device, &self.queue, canvas, current_stroke);

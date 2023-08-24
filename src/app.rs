@@ -27,10 +27,9 @@ use crate::{
 		keymap::{execute_keymap, Keymap},
 		Button, InputMonitor, Key,
 	},
-	pixel::{Lx, Px, Scale, Vex, Zero, Zoom},
 	render::{stroke_renderer::SelectionTransformation, DrawCommand, Renderer, Vertex},
 	tools::*,
-	utility::*,
+	utility::{Lx, Px, Scale, Vex, Zero, Zoom, *},
 	APP_NAME_CAPITALIZED,
 };
 
@@ -43,7 +42,7 @@ const OUTLINE_WIDTH: Lx = Lx(2.);
 const SATURATION_VALUE_WINDOW_DIAMETER: Lx = Lx(8.);
 
 pub enum ClipboardContents {
-	Subcanvas(Vec<Object<Image>>, Vec<Object<Stroke>>),
+	Subcanvas(Vec<Object<Image>>, Vec<Stroke>),
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -174,7 +173,6 @@ impl App {
 						} else {
 							self.canvas.view.zoom = Zoom(self.canvas.view.zoom.0 * f32::powf(2., *rows / 32.));
 						}
-						self.canvas.is_view_dirty = true;
 						self.should_redraw = true;
 					},
 					WindowEvent::CursorMoved { position, .. } => {
@@ -307,35 +305,32 @@ impl App {
 
 		match &self.mode_stack.base_mode {
 			Tool::Move { origin: Some(origin) } => {
-				self.canvas.selection_transformation = SelectionTransformation {
+				*self.canvas.selection_transformation = SelectionTransformation {
 					translation: self.canvas.view.position + cursor_virtual_position - *origin,
 					..Default::default()
 				};
-				self.canvas.is_selection_transformation_dirty = true;
 			},
 			Tool::Rotate {
 				origin: Some(RotateDraft { center, initial_position }),
 			} => {
 				let selection_offset = self.canvas.view.position + cursor_virtual_position - center;
 				let angle = initial_position.angle_to(selection_offset);
-				self.canvas.selection_transformation = SelectionTransformation {
+				*self.canvas.selection_transformation = SelectionTransformation {
 					center_of_transformation: *center,
 					rotation: angle,
 					..Default::default()
 				};
-				self.canvas.is_selection_transformation_dirty = true;
 			},
 			Tool::Resize {
 				origin: Some(ResizeDraft { center, initial_distance }),
 			} => {
 				let selection_distance = (self.canvas.view.position + cursor_virtual_position - center).norm();
 				let dilation = selection_distance / initial_distance;
-				self.canvas.selection_transformation = SelectionTransformation {
+				*self.canvas.selection_transformation = SelectionTransformation {
 					center_of_transformation: *center,
 					dilation,
 					..Default::default()
 				};
-				self.canvas.is_selection_transformation_dirty = true;
 			},
 			_ => {},
 		}
@@ -492,7 +487,7 @@ impl App {
 					}
 				} else {
 					if let Some(stroke) = current_stroke.take() {
-						self.canvas.perform_operation(Operation::CommitStrokes { strokes: vec![stroke.commit()] });
+						self.canvas.perform_operation(Operation::CommitStrokes { strokes: vec![stroke.finalize().into()] });
 					}
 				}
 			},
@@ -538,7 +533,6 @@ impl App {
 
 				if let Some(origin) = origin {
 					self.canvas.view.position = origin.position - (cursor_virtual_position - origin.cursor);
-					self.canvas.is_view_dirty = true;
 				}
 			},
 			Tool::Zoom { origin } => {
@@ -567,7 +561,6 @@ impl App {
 					let y_ratio = self.cursor_physical_position[1] / window_height;
 					let zoom_ratio = f32::powf(8., origin.initial_y_ratio - y_ratio);
 					self.canvas.view.zoom = Zoom(origin.initial_zoom * zoom_ratio);
-					self.canvas.is_view_dirty = true;
 				}
 			},
 			Tool::Orbit { initial } => {
@@ -598,7 +591,6 @@ impl App {
 					let vector = self.cursor_physical_position - semidimensions;
 					let angle = vector.angle();
 					self.canvas.view.tilt = *tilt - angle + *cursor_angle;
-					self.canvas.is_view_dirty = true;
 				}
 			},
 			Tool::Move { origin } => {
@@ -627,7 +619,6 @@ impl App {
 						}
 
 						self.canvas.selection_transformation = Default::default();
-						self.canvas.is_selection_transformation_dirty = true;
 					}
 				}
 			},
@@ -671,7 +662,6 @@ impl App {
 						}
 
 						self.canvas.selection_transformation = Default::default();
-						self.canvas.is_selection_transformation_dirty = true;
 					}
 				}
 			},
@@ -715,7 +705,6 @@ impl App {
 						}
 
 						self.canvas.selection_transformation = Default::default();
-						self.canvas.is_selection_transformation_dirty = true;
 					}
 				}
 			},

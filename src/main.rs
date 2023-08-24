@@ -18,10 +18,10 @@ mod clipboard;
 mod file;
 #[path = "input/_.rs"]
 mod input;
-mod pixel;
 #[path = "render/_.rs"]
 mod render;
 mod tools;
+#[path = "utility/_.rs"]
 mod utility;
 #[cfg(target_os = "windows")]
 mod windows;

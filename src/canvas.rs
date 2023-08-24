@@ -8,9 +8,8 @@
 use std::path::PathBuf;
 
 use crate::{
-	pixel::{Vex, Vx, Vx2, Zero, Zoom},
 	render::{stroke_renderer::SelectionTransformation, texture::Texture, Renderer},
-	utility::{HSV, SRGBA8},
+	utility::{Tracked, Vex, Vx, Vx2, Zero, Zoom, HSV, SRGBA8},
 };
 
 #[derive(Clone)]
@@ -27,30 +26,38 @@ pub struct Image {
 
 #[derive(Clone)]
 pub struct Stroke {
+	// Local coordinate system.
+	pub position: Vex<2, Vx>,
+	pub orientation: f32,
+	pub dilation: f32,
+
+	// Modifiable data.
+	pub is_selected: bool,
 	pub color: SRGBA8,
+
+	// Geometry parameters.
 	pub stroke_radius: Vx,
 	pub points: Vec<Point>,
+
+	// Cached geometry.
 	pub vertices: Vec<(Vex<2, Vx>, f32)>,
 	pub relative_indices: Vec<u32>,
 }
 
 impl Stroke {
-	pub fn new(color: SRGBA8, stroke_radius: Vx, points: Vec<Point>, position: Vex<2, Vx>, orientation: f32, dilation: f32) -> Object<Self> {
+	pub fn new(color: SRGBA8, stroke_radius: Vx, points: Vec<Point>, position: Vex<2, Vx>, orientation: f32, dilation: f32) -> Self {
 		let (vertices, relative_indices) = Self::compute_geometry(&points, stroke_radius);
 
-		Object {
-			object: Stroke {
-				color,
-				stroke_radius,
-				points,
-				vertices,
-				relative_indices,
-			},
+		Self {
 			position,
 			orientation,
 			dilation,
 			is_selected: false,
-			is_dirty: true,
+			color,
+			stroke_radius,
+			points,
+			vertices,
+			relative_indices,
 		}
 	}
 
@@ -150,7 +157,7 @@ impl IncompleteStroke {
 		}
 	}
 
-	pub fn commit(mut self) -> Object<Stroke> {
+	pub fn finalize(mut self) -> Stroke {
 		let local_centroid = if !self.points.is_empty() {
 			let local_centroid = self.points.iter().fold(Vex::ZERO, |acc, point| acc + point.position) / self.points.len() as f32;
 			for point in self.points.iter_mut() {
@@ -161,21 +168,17 @@ impl IncompleteStroke {
 			Vex::ZERO
 		};
 
-		if self.points.len() == 1 {
-			self.points[0].pressure = self.max_pressure;
+		if let [point] = self.points.as_mut_slice() {
+			point.pressure = self.max_pressure;
 		}
 
 		Stroke::new(self.color, STROKE_RADIUS, self.points, self.position + local_centroid, 0., 1.)
 	}
 
-	pub fn preview(&self) -> Object<Stroke> {
-		let mut points = self.points.clone();
+	pub fn preview(&self) -> Stroke {
+		let points = if self.points.len() != 1 { self.points.clone() } else { Vec::new() };
 
-		if points.len() == 1 {
-			points[0].pressure = self.max_pressure;
-		}
-
-		Stroke::new(self.color, STROKE_RADIUS, self.points.clone(), self.position, 0., 1.)
+		Stroke::new(self.color, STROKE_RADIUS, points, self.position, 0., 1.)
 	}
 }
 
@@ -184,7 +187,7 @@ enum Retraction {
 	CommitImages(usize),
 	DeleteObjects {
 		antitone_index_image_pairs: Vec<(usize, Object<Image>)>,
-		antitone_index_stroke_pairs: Vec<(usize, Object<Stroke>)>,
+		antitone_index_stroke_pairs: Vec<(usize, Stroke)>,
 	},
 	RecolorStrokes {
 		index_color_pairs: Vec<(usize, SRGBA8)>,
@@ -210,7 +213,7 @@ enum Retraction {
 }
 
 pub enum Operation {
-	CommitStrokes { strokes: Vec<Object<Stroke>> },
+	CommitStrokes { strokes: Vec<Tracked<Stroke>> },
 	CommitImages { images: Vec<Object<Image>> },
 	DeleteObjects { monotone_image_indices: Vec<usize>, monotone_stroke_indices: Vec<usize> },
 	RecolorStrokes { indices: Vec<usize>, new_color: SRGBA8 },
@@ -229,8 +232,6 @@ pub struct Object<T> {
 	// Dilation about the local origin.
 	pub dilation: f32,
 	pub is_selected: bool,
-	// Tracks whether position/orientation/dilation, is_selected, or color has been invalidated.
-	pub is_dirty: bool,
 }
 
 pub struct View {
@@ -248,18 +249,16 @@ impl View {
 pub struct Canvas {
 	pub file_path: Option<PathBuf>,
 	pub background_color: HSV,
-	pub view: View,
-	pub is_view_dirty: bool,
+	pub view: Tracked<View>,
 	pub images: Vec<Object<Image>>,
-	pub strokes: Vec<Object<Stroke>>,
+	pub strokes: Vec<Tracked<Stroke>>,
 	retractions: Vec<Retraction>,
 	operations: Vec<Operation>,
 	pub textures: Vec<Texture>,
 	pub retraction_count_at_save: Option<usize>,
 	// Tracks the smallest index of a stroke with invalidated geometry.
 	pub base_dirty_stroke_index: usize,
-	pub selection_transformation: SelectionTransformation,
-	pub is_selection_transformation_dirty: bool,
+	pub selection_transformation: Tracked<SelectionTransformation>,
 }
 
 impl Canvas {
@@ -267,8 +266,7 @@ impl Canvas {
 		Self {
 			file_path: None,
 			background_color,
-			view: View::new(),
-			is_view_dirty: true,
+			view: View::new().into(),
 			images: Vec::new(),
 			strokes: Vec::new(),
 			retractions: Vec::new(),
@@ -277,25 +275,22 @@ impl Canvas {
 			retraction_count_at_save: None,
 			base_dirty_stroke_index: 0,
 			selection_transformation: Default::default(),
-			is_selection_transformation_dirty: true,
 		}
 	}
 
-	pub fn from_file(file_path: PathBuf, background_color: HSV, view: View, images: Vec<Object<Image>>, strokes: Vec<Object<Stroke>>, textures: Vec<Texture>) -> Self {
+	pub fn from_file(file_path: PathBuf, background_color: HSV, view: View, images: Vec<Object<Image>>, strokes: Vec<Tracked<Stroke>>, textures: Vec<Texture>) -> Self {
 		Self {
 			file_path: Some(file_path),
 			background_color,
-			view,
+			view: view.into(),
 			images,
 			strokes,
-			is_view_dirty: true,
 			retractions: Vec::new(),
 			operations: Vec::new(),
 			textures,
 			retraction_count_at_save: Some(0),
 			base_dirty_stroke_index: 0,
 			selection_transformation: Default::default(),
-			is_selection_transformation_dirty: true,
 		}
 	}
 
@@ -303,7 +298,7 @@ impl Canvas {
 		self.images.as_ref()
 	}
 
-	pub fn strokes(&self) -> &[Object<Stroke>] {
+	pub fn strokes(&self) -> &[Tracked<Stroke>] {
 		self.strokes.as_ref()
 	}
 
@@ -337,7 +332,7 @@ impl Canvas {
 					for index in monotone_stroke_indices.iter().rev().copied() {
 						debug_assert!(index < self.strokes.len());
 						let stroke = self.strokes.remove(index);
-						antitone_index_stroke_pairs.push((index, stroke));
+						antitone_index_stroke_pairs.push((index, stroke.take()));
 					}
 
 					if let Some(index) = monotone_stroke_indices.first() {
@@ -354,9 +349,8 @@ impl Canvas {
 
 					for index in indices {
 						if let Some(stroke) = self.strokes.get_mut(index) {
-							index_color_pairs.push((index, stroke.object.color));
-							stroke.object.color = new_color;
-							stroke.is_dirty = true;
+							index_color_pairs.push((index, stroke.color));
+							stroke.color = new_color;
 						}
 					}
 
@@ -370,9 +364,8 @@ impl Canvas {
 					}
 
 					for index in stroke_indices.iter().copied() {
-						if let Some(object) = self.strokes.get_mut(index) {
-							object.position = object.position + vector;
-							object.is_dirty = true;
+						if let Some(stroke) = self.strokes.get_mut(index) {
+							stroke.position = stroke.position + vector;
 						}
 					}
 
@@ -387,10 +380,9 @@ impl Canvas {
 					}
 
 					for index in stroke_indices.iter().copied() {
-						if let Some(object) = self.strokes.get_mut(index) {
-							object.position = object.position.rotate_about(center, angle);
-							object.orientation += angle;
-							object.is_dirty = true;
+						if let Some(stroke) = self.strokes.get_mut(index).map(AsMut::as_mut) {
+							stroke.position = stroke.position.rotate_about(center, angle);
+							stroke.orientation += angle;
 						}
 					}
 
@@ -405,10 +397,9 @@ impl Canvas {
 					}
 
 					for index in stroke_indices.iter().copied() {
-						if let Some(object) = self.strokes.get_mut(index) {
-							object.position = object.position.dilate_about(center, dilation);
-							object.dilation *= dilation;
-							object.is_dirty = true;
+						if let Some(stroke) = self.strokes.get_mut(index).map(AsMut::as_mut) {
+							stroke.position = stroke.position.dilate_about(center, dilation);
+							stroke.dilation *= dilation;
 						}
 					}
 
@@ -460,7 +451,7 @@ impl Canvas {
 
 					for (index, stroke) in antitone_index_stroke_pairs.into_iter().rev() {
 						debug_assert!(index <= self.strokes.len());
-						self.strokes.insert(index, stroke);
+						self.strokes.insert(index, stroke.into());
 						monotone_stroke_indices.push(index);
 					}
 
@@ -475,8 +466,7 @@ impl Canvas {
 
 					for (index, old_color) in index_color_pairs.into_iter() {
 						if let Some(stroke) = self.strokes.get_mut(index) {
-							stroke.object.color = old_color;
-							stroke.is_dirty = true;
+							stroke.color = old_color;
 						}
 
 						indices.push(index);
@@ -494,7 +484,6 @@ impl Canvas {
 					for index in stroke_indices.iter().copied() {
 						if let Some(stroke) = self.strokes.get_mut(index) {
 							stroke.position = stroke.position - vector;
-							stroke.is_dirty = true;
 						}
 					}
 
@@ -509,10 +498,9 @@ impl Canvas {
 					}
 
 					for index in stroke_indices.iter().copied() {
-						if let Some(object) = self.strokes.get_mut(index) {
-							object.position = object.position.rotate_about(center, -angle);
-							object.orientation -= angle;
-							object.is_dirty = true;
+						if let Some(stroke) = self.strokes.get_mut(index).map(AsMut::as_mut) {
+							stroke.position = stroke.position.rotate_about(center, -angle);
+							stroke.orientation -= angle;
 						}
 					}
 
@@ -527,10 +515,9 @@ impl Canvas {
 					}
 
 					for index in stroke_indices.iter().copied() {
-						if let Some(object) = self.strokes.get_mut(index) {
-							object.position = object.position.dilate_about(center, 1. / dilation);
-							object.dilation /= dilation;
-							object.is_dirty = true;
+						if let Some(stroke) = self.strokes.get_mut(index).map(AsMut::as_mut) {
+							stroke.position = stroke.position.dilate_about(center, 1. / dilation);
+							stroke.dilation /= dilation;
 						}
 					}
 
@@ -598,28 +585,25 @@ impl Canvas {
 
 		'strokes: for stroke in self.strokes.iter_mut() {
 			if should_aggregate {
-				for point in stroke.object.points.iter() {
+				for point in stroke.points.iter() {
 					let point_position = (stroke.position + point.position.rotate(stroke.orientation) * stroke.dilation - screen_center).rotate(-tilt);
 					if point_position[0] >= min[0] && point_position[1] >= min[1] && point_position[0] <= max[0] && point_position[1] <= max[1] {
 						stroke.is_selected = !stroke.is_selected;
-						stroke.is_dirty = true;
 						continue 'strokes;
 					}
 				}
 			} else {
-				for point in stroke.object.points.iter() {
+				for point in stroke.points.iter() {
 					let point_position = (stroke.position + point.position.rotate(stroke.orientation) * stroke.dilation - screen_center).rotate(-tilt);
 					if point_position[0] >= min[0] && point_position[1] >= min[1] && point_position[0] <= max[0] && point_position[1] <= max[1] {
 						if stroke.is_selected == false {
 							stroke.is_selected = true;
-							stroke.is_dirty = true;
 						}
 						continue 'strokes;
 					}
 				}
 				if stroke.is_selected == true {
 					stroke.is_selected = false;
-					stroke.is_dirty = true;
 				}
 			}
 		}
@@ -640,8 +624,6 @@ impl Canvas {
 
 		for stroke in self.strokes.iter_mut() {
 			stroke.is_selected = is_selected;
-			// Inefficient, but it'll work.
-			stroke.is_dirty = true;
 		}
 	}
 

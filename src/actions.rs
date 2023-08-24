@@ -9,15 +9,15 @@ use enumset::EnumSet;
 
 use crate::{
 	app::{App, ClipboardContents, PreFullscreenState},
-	canvas::{Canvas, Image, Object, Operation},
+	canvas::{Canvas, Image, Object, Operation, Stroke},
 	clipboard::ClipboardData,
 	file::{load_canvas_from_file, save_canvas_to_file},
 	input::{
 		keymap::{Action, Keymap},
 		Key,
 	},
-	pixel::{Px, Vex, Vx},
 	tools::TransientModeSwitch,
+	utility::{Px, Vex, Vx},
 };
 
 pub fn default_keymap() -> Keymap {
@@ -253,9 +253,9 @@ fn cut(app: &mut App) {
 			if stroke.is_selected {
 				Some((
 					index,
-					Object {
+					Stroke {
 						position: stroke.position - offset,
-						..stroke.clone()
+						..(*stroke).clone()
 					},
 				))
 			} else {
@@ -302,9 +302,9 @@ fn copy(app: &mut App) {
 		.iter()
 		.filter_map(|stroke| {
 			if stroke.is_selected {
-				Some(Object {
+				Some(Stroke {
 					position: stroke.position - offset,
-					..stroke.clone()
+					..(*stroke).clone()
 				})
 			} else {
 				None
@@ -344,10 +344,13 @@ fn paste(app: &mut App) {
 					app.canvas.perform_operation(Operation::CommitStrokes {
 						strokes: strokes
 							.iter()
-							.map(|stroke| Object {
-								position: stroke.position + offset,
-								is_selected: true,
-								..stroke.clone()
+							.map(|stroke| {
+								Stroke {
+									position: stroke.position + offset,
+									is_selected: true,
+									..stroke.clone()
+								}
+								.into()
 							})
 							.collect(),
 					})
@@ -367,7 +370,6 @@ fn paste(app: &mut App) {
 					orientation: app.canvas.view.tilt,
 					dilation: 1.,
 					is_selected: false,
-					is_dirty: true,
 				}],
 			});
 		},

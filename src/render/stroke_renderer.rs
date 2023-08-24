@@ -9,8 +9,8 @@ use std::{borrow::Cow, ops::Range};
 
 use super::{buffer::DynamicBuffer, dynamic_storage_buffer::DynamicStorageBuffer, uniform_buffer::UniformBuffer, vertex_attributes::VertexAttributes, ViewportUniform};
 use crate::{
-	canvas::{Canvas, IncompleteStroke, Object, Stroke},
-	pixel::{Vex, Vx, Zero},
+	canvas::{Canvas, IncompleteStroke},
+	utility::{Tracked, Vex, Vx, Zero},
 };
 
 #[repr(C)]
@@ -61,6 +61,11 @@ pub struct StrokeRenderer {
 	index_buffer: DynamicBuffer<u32>,
 	extension_storage_buffer: DynamicStorageBuffer<StrokeExtension>,
 	pub selection_transformation_uniform_buffer: UniformBuffer<SelectionTransformation>,
+
+	// Regeneration buffers.
+	generated_vertices: Vec<StrokeVertex>,
+	generated_indices: Vec<u32>,
+	generated_extensions: Vec<StrokeExtension>,
 }
 
 impl StrokeRenderer {
@@ -122,84 +127,86 @@ impl StrokeRenderer {
 			index_buffer,
 			extension_storage_buffer,
 			selection_transformation_uniform_buffer,
+			generated_vertices: Vec::new(),
+			generated_indices: Vec::new(),
+			generated_extensions: Vec::new(),
 		}
 	}
 
 	pub fn prepare(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, canvas: &mut Canvas, current_stroke: Option<&IncompleteStroke>) -> Range<u32> {
-		if canvas.is_selection_transformation_dirty {
-			self.selection_transformation_uniform_buffer.write(queue, canvas.selection_transformation);
+		// First, we update the selection transformation uniform if necessary.
+		if let Some(selection_transformation) = canvas.selection_transformation.read_if_dirty() {
+			self.selection_transformation_uniform_buffer.write(queue, *selection_transformation);
 		}
 
+		// Then, we iterate through the uninvalidated strokes and update their extensions if necessary.
 		let mut vertex_offset = 0;
 		let mut index_offset = 0;
 		for (i, stroke) in canvas.strokes[0..canvas.base_dirty_stroke_index].iter_mut().enumerate() {
-			if stroke.is_dirty {
-				let lrgba = stroke.object.color.to_lrgba();
+			if let Some(stroke) = stroke.read_if_dirty() {
+				let lrgba = stroke.color.to_lrgba();
 				let color = [0, 1, 2].map(|n: usize| lrgba.0[n]);
-				self.write_single_extension(
+				self.extension_storage_buffer.write(
 					device,
 					queue,
 					i,
-					StrokeExtension {
+					&[StrokeExtension {
 						translation: stroke.position.0,
 						rotation: stroke.orientation,
 						dilation: stroke.dilation,
 						color,
 						is_selected: if stroke.is_selected { 1. } else { 0. },
-					},
+					}],
 				);
-				stroke.is_dirty = false;
 			}
-			vertex_offset += stroke.object.vertices.len();
-			index_offset += stroke.object.relative_indices.len();
+			vertex_offset += stroke.vertices.len();
+			index_offset += stroke.relative_indices.len();
 		}
 
-		let index_end = self.write_all_from(device, queue, vertex_offset, index_offset, canvas.base_dirty_stroke_index, canvas.strokes[canvas.base_dirty_stroke_index..].as_mut(), current_stroke);
+		// Then, we iterate through the invalidated strokes and generate everything: vertices/indices/extensions.
+		let extension_offset = canvas.base_dirty_stroke_index;
 
-		canvas.base_dirty_stroke_index = canvas.strokes.len();
+		let invalidated_strokes = canvas.strokes[extension_offset..].as_mut();
 
-		0..index_end
-	}
+		self.generated_vertices.clear();
+		self.generated_indices.clear();
+		self.generated_extensions.clear();
+		self.generated_extensions.reserve(invalidated_strokes.len());
 
-	pub fn write_all_from(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, vertex_offset: usize, index_offset: usize, extension_offset: usize, strokes: &mut [Object<Stroke>], current_stroke: Option<&IncompleteStroke>) -> u32 {
-		let mut vertices = vec![];
-		let mut indices = vec![];
-		let mut extensions = Vec::with_capacity(strokes.len());
-
-		for (i, stroke) in strokes.iter_mut().enumerate() {
+		for (i, invalidated_stroke) in invalidated_strokes.iter_mut().map(Tracked::read).enumerate() {
 			let current_extension_index = (extension_offset + i) as u32;
-			let current_index_base = (vertex_offset + vertices.len()) as u32;
-			let lrgba = stroke.object.color.to_lrgba();
+			let current_index_base = (vertex_offset + self.generated_vertices.len()) as u32;
+			let lrgba = invalidated_stroke.color.to_lrgba();
 			let color = [0, 1, 2].map(|n: usize| lrgba.0[n]);
-			vertices.extend(stroke.object.vertices.iter().map(|(position, polarity)| StrokeVertex {
+			self.generated_vertices.extend(invalidated_stroke.vertices.iter().map(|(position, polarity)| StrokeVertex {
 				position: position.0,
 				polarity: *polarity,
 				extension_index: current_extension_index,
 			}));
-			indices.extend(stroke.object.relative_indices.iter().map(|n| current_index_base + n));
-			extensions.push(StrokeExtension {
-				translation: stroke.position.0,
-				rotation: stroke.orientation,
-				dilation: stroke.dilation,
+			self.generated_indices.extend(invalidated_stroke.relative_indices.iter().map(|n| current_index_base + n));
+			self.generated_extensions.push(StrokeExtension {
+				translation: invalidated_stroke.position.0,
+				rotation: invalidated_stroke.orientation,
+				dilation: invalidated_stroke.dilation,
 				color,
-				is_selected: if stroke.is_selected { 1. } else { 0. },
+				is_selected: if invalidated_stroke.is_selected { 1. } else { 0. },
 			});
-			stroke.is_dirty = false;
 		}
 
+		// In addition, we append the generated vertices/indices/extension of the current stroke to the regeneration buffers.
 		if let Some(current_stroke) = current_stroke {
 			let stroke = current_stroke.preview();
-			let current_extension_index = (extension_offset + strokes.len()) as u32;
-			let current_index_offset = (vertex_offset + vertices.len()) as u32;
-			let lrgba = stroke.object.color.to_lrgba();
+			let current_extension_index = (extension_offset + invalidated_strokes.len()) as u32;
+			let current_index_offset = (vertex_offset + self.generated_vertices.len()) as u32;
+			let lrgba = stroke.color.to_lrgba();
 			let color = [0, 1, 2].map(|n: usize| lrgba.0[n]);
-			vertices.extend(stroke.object.vertices.iter().map(|(position, polarity)| StrokeVertex {
+			self.generated_vertices.extend(stroke.vertices.iter().map(|(position, polarity)| StrokeVertex {
 				position: position.0,
 				polarity: *polarity,
 				extension_index: current_extension_index,
 			}));
-			indices.extend(stroke.object.relative_indices.iter().map(|n| current_index_offset + n));
-			extensions.push(StrokeExtension {
+			self.generated_indices.extend(stroke.relative_indices.iter().map(|n| current_index_offset + n));
+			self.generated_extensions.push(StrokeExtension {
 				translation: stroke.position.0,
 				rotation: stroke.orientation,
 				dilation: stroke.dilation,
@@ -208,18 +215,19 @@ impl StrokeRenderer {
 			});
 		}
 
-		self.vertex_buffer.write(device, queue, vertex_offset, &vertices);
-		self.index_buffer.write(device, queue, index_offset, &indices);
-		self.extension_storage_buffer.write(device, queue, extension_offset, &extensions);
+		// Finally, we write the regeneration buffers to the device buffers.
+		self.vertex_buffer.write(device, queue, vertex_offset, &self.generated_vertices);
+		self.index_buffer.write(device, queue, index_offset, &self.generated_indices);
+		self.extension_storage_buffer.write(device, queue, extension_offset, &self.generated_extensions);
 
-		(indices.len() + index_offset) as u32
+		// We mark the entire stroke array as uninvalidated.
+		canvas.base_dirty_stroke_index = canvas.strokes.len();
+
+		// We return the range of indices to be rendered.
+		0..(self.generated_indices.len() + index_offset) as u32
 	}
 
-	pub fn write_single_extension(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, index: usize, extension: StrokeExtension) {
-		self.extension_storage_buffer.write(device, queue, index, &[extension]);
-	}
-
-	// Precondition: bind group 0 is set to the viewport and bind group 1 is set to the selection transformation.
+	// Precondition: bind group 0 is set to the viewport.
 	pub fn render<'r>(&'r self, render_pass: &mut wgpu::RenderPass<'r>, index_range: Range<u32>) {
 		render_pass.set_pipeline(&self.render_pipeline);
 		self.selection_transformation_uniform_buffer.activate(render_pass, 1);
