@@ -7,7 +7,7 @@
 
 use std::{borrow::Cow, ops::Range};
 
-use super::{buffer::DynamicBuffer, dynamic_storage_buffer::DynamicStorageBuffer, uniform_buffer::UniformBuffer, vertex_attributes::VertexAttributes, ViewportUniform};
+use super::{dynamic_buffer::DynamicBuffer, dynamic_storage_buffer::DynamicStorageBuffer, uniform_buffer::UniformBuffer, vertex_attributes::VertexAttributes, ViewportUniform};
 use crate::{
 	canvas::{Canvas, IncompleteStroke},
 	utility::{Tracked, Vex, Vx, Zero},

@@ -5,22 +5,13 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-mod buffer;
-mod dynamic_storage_buffer;
-mod instance_renderer;
-pub mod stroke_renderer;
-pub mod texture;
-mod uniform_buffer;
-pub mod vertex_attributes;
-mod vertex_renderer;
-
 use std::{ops::Range, sync::Arc};
 
 use fast_srgb8::srgb8_to_f32;
 use pollster::FutureExt;
 use raw_window_handle::{HasRawDisplayHandle, HasRawWindowHandle};
 
-use self::{instance_renderer::InstanceRenderer, stroke_renderer::StrokeRenderer, texture::Texture, uniform_buffer::UniformBuffer, vertex_attributes::VertexAttributes, vertex_renderer::VertexRenderer};
+use super::{instance_renderer::InstanceRenderer, stroke_renderer::StrokeRenderer, texture::Texture, uniform_buffer::UniformBuffer, vertex_attributes::VertexAttributes, vertex_renderer::VertexRenderer};
 use crate::{
 	canvas::{Canvas, IncompleteStroke},
 	utility::{Px, Vex, Vx},

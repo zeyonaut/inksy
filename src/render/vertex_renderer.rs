@@ -7,7 +7,7 @@
 
 use std::{borrow::Cow, ops::Range};
 
-use super::{buffer::DynamicBuffer, uniform_buffer::UniformBuffer, vertex_attributes::VertexAttributes, ViewportUniform};
+use super::{dynamic_buffer::DynamicBuffer, uniform_buffer::UniformBuffer, vertex_attributes::VertexAttributes, ViewportUniform};
 
 pub struct VertexRenderer<Vertex> {
 	render_pipeline: wgpu::RenderPipeline,

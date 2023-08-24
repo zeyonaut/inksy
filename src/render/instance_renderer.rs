@@ -9,7 +9,7 @@ use std::{borrow::Cow, ops::Range};
 
 use wgpu::util::DeviceExt;
 
-use super::{buffer::DynamicBuffer, vertex_attributes::VertexAttributes};
+use super::{dynamic_buffer::DynamicBuffer, vertex_attributes::VertexAttributes};
 
 pub struct InstanceRenderer<Instance> {
 	render_pipeline: wgpu::RenderPipeline,
