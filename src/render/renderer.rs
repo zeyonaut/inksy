@@ -166,22 +166,6 @@ impl Renderer {
 		};
 		surface.configure(&device, &config);
 
-		let mut font_system = glyphon::FontSystem::new_with_fonts([glyphon::fontdb::Source::Binary(Arc::new(include_bytes!("../../ext/dejavu-sans-2.37/DejaVuSans.ttf").as_slice()))].into_iter());
-		font_system.db_mut().set_sans_serif_family("DejaVu Sans");
-		let swash_cache = glyphon::SwashCache::new();
-		let mut text_atlas = glyphon::TextAtlas::new(&device, &queue, texture_format);
-		let text_renderer = glyphon::TextRenderer::new(&mut text_atlas, &device, wgpu::MultisampleState::default(), None);
-		let font_size = 13.;
-		let mut buffer = glyphon::Buffer::new(&mut font_system, glyphon::Metrics::new(font_size, font_size));
-		// Set the text, and resize the buffer to fit it perfectly.
-		buffer.set_text(&mut font_system, "(Draw something!)", glyphon::Attrs::new().stretch(glyphon::Stretch::Condensed), glyphon::Shaping::Basic);
-		buffer.set_wrap(&mut font_system, glyphon::Wrap::None);
-		let w = buffer.line_layout(&mut font_system, 0).unwrap().iter().fold(0., |a, x| a + x.w);
-		buffer.set_size(&mut font_system, w, font_size);
-		buffer.shape_until(&mut font_system, 1);
-
-		let texture_bind_group_layout = Texture::bind_group_layout(&device);
-
 		let multisample_texture = if adapter.get_texture_format_features(texture_format).flags.sample_count_supported(4) && SHOULD_MULTISAMPLE {
 			Some(device.create_texture(&wgpu::TextureDescriptor {
 				label: None,
@@ -196,6 +180,32 @@ impl Renderer {
 		} else {
 			None
 		};
+		let sample_count = multisample_texture.as_ref().map_or(1, |_| 4);
+
+		let mut font_system = glyphon::FontSystem::new_with_fonts([glyphon::fontdb::Source::Binary(Arc::new(include_bytes!("../../ext/dejavu-sans-2.37/DejaVuSans.ttf").as_slice()))].into_iter());
+		font_system.db_mut().set_sans_serif_family("DejaVu Sans");
+		let swash_cache = glyphon::SwashCache::new();
+		let mut text_atlas = glyphon::TextAtlas::new(&device, &queue, texture_format);
+		let text_renderer = glyphon::TextRenderer::new(
+			&mut text_atlas,
+			&device,
+			wgpu::MultisampleState {
+				count: sample_count,
+				mask: !0,
+				alpha_to_coverage_enabled: false,
+			},
+			None,
+		);
+		let font_size = 13.;
+		let mut buffer = glyphon::Buffer::new(&mut font_system, glyphon::Metrics::new(font_size, font_size));
+		// Set the text, and resize the buffer to fit it perfectly.
+		buffer.set_text(&mut font_system, "(Draw something!)", glyphon::Attrs::new().stretch(glyphon::Stretch::Condensed), glyphon::Shaping::Basic);
+		buffer.set_wrap(&mut font_system, glyphon::Wrap::None);
+		let w = buffer.line_layout(&mut font_system, 0).unwrap().iter().fold(0., |a, x| a + x.w);
+		buffer.set_size(&mut font_system, w, font_size);
+		buffer.shape_until(&mut font_system, 1);
+
+		let texture_bind_group_layout = Texture::bind_group_layout(&device);
 
 		let viewport_buffer = UniformBuffer::new(
 			&device,
@@ -208,7 +218,7 @@ impl Renderer {
 			},
 		);
 
-		let sample_count = multisample_texture.as_ref().map_or_else(|| 1, |_| 4);
+		let sample_count = multisample_texture.as_ref().map_or(1, |_| 4);
 
 		let canvas_renderer = CanvasRenderer::new(&device, config.format, &viewport_buffer, sample_count);
 		let card_renderer = InstanceRenderer::new(&device, config.format, include_str!("shaders/round_rectangle.wgsl"), "vs_main", "fs_main", &[&viewport_buffer.bind_group_layout], sample_count);
