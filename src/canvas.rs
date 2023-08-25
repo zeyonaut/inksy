@@ -20,6 +20,15 @@ pub struct Point {
 
 #[derive(Clone)]
 pub struct Image {
+	// Local coordinate system.
+	pub position: Vex<2, Vx>,
+	pub orientation: f32,
+	pub dilation: f32,
+
+	// Modifiable data.
+	pub is_selected: bool,
+
+	// Stable data.
 	pub texture_index: usize,
 	pub dimensions: Vex<2, Vx>,
 }
@@ -186,7 +195,7 @@ enum Retraction {
 	CommitStrokes(usize),
 	CommitImages(usize),
 	DeleteObjects {
-		antitone_index_image_pairs: Vec<(usize, Object<Image>)>,
+		antitone_index_image_pairs: Vec<(usize, Image)>,
 		antitone_index_stroke_pairs: Vec<(usize, Stroke)>,
 	},
 	RecolorStrokes {
@@ -214,24 +223,12 @@ enum Retraction {
 
 pub enum Operation {
 	CommitStrokes { strokes: Vec<Tracked<Stroke>> },
-	CommitImages { images: Vec<Object<Image>> },
+	CommitImages { images: Vec<Tracked<Image>> },
 	DeleteObjects { monotone_image_indices: Vec<usize>, monotone_stroke_indices: Vec<usize> },
 	RecolorStrokes { indices: Vec<usize>, new_color: SRGBA8 },
 	TranslateObjects { image_indices: Vec<usize>, stroke_indices: Vec<usize>, vector: Vex<2, Vx> },
 	RotateObjects { image_indices: Vec<usize>, stroke_indices: Vec<usize>, center: Vex<2, Vx>, angle: f32 },
 	ResizeObjects { image_indices: Vec<usize>, stroke_indices: Vec<usize>, center: Vex<2, Vx>, dilation: f32 },
-}
-
-#[derive(Clone)]
-pub struct Object<T> {
-	pub object: T,
-	// Position of the local origin.
-	pub position: Vex<2, Vx>,
-	// Orientation about the local origin.
-	pub orientation: f32,
-	// Dilation about the local origin.
-	pub dilation: f32,
-	pub is_selected: bool,
 }
 
 pub struct View {
@@ -250,14 +247,15 @@ pub struct Canvas {
 	pub file_path: Option<PathBuf>,
 	pub background_color: HSV,
 	pub view: Tracked<View>,
-	pub images: Vec<Object<Image>>,
+	pub images: Vec<Tracked<Image>>,
 	pub strokes: Vec<Tracked<Stroke>>,
+	// Tracks the smallest indices of an invalidated image/stroke.
+	pub base_dirty_image_index: usize,
+	pub base_dirty_stroke_index: usize,
 	retractions: Vec<Retraction>,
 	operations: Vec<Operation>,
 	pub textures: Vec<Texture>,
 	pub retraction_count_at_save: Option<usize>,
-	// Tracks the smallest index of a stroke with invalidated geometry.
-	pub base_dirty_stroke_index: usize,
 	pub selection_transformation: Tracked<SelectionTransformation>,
 }
 
@@ -269,32 +267,34 @@ impl Canvas {
 			view: View::new().into(),
 			images: Vec::new(),
 			strokes: Vec::new(),
+			base_dirty_image_index: 0,
+			base_dirty_stroke_index: 0,
 			retractions: Vec::new(),
 			operations: Vec::new(),
 			textures: Vec::new(),
 			retraction_count_at_save: None,
-			base_dirty_stroke_index: 0,
 			selection_transformation: Default::default(),
 		}
 	}
 
-	pub fn from_file(file_path: PathBuf, background_color: HSV, view: View, images: Vec<Object<Image>>, strokes: Vec<Tracked<Stroke>>, textures: Vec<Texture>) -> Self {
+	pub fn from_file(file_path: PathBuf, background_color: HSV, view: View, images: Vec<Tracked<Image>>, strokes: Vec<Tracked<Stroke>>, textures: Vec<Texture>) -> Self {
 		Self {
 			file_path: Some(file_path),
 			background_color,
 			view: view.into(),
 			images,
 			strokes,
+			base_dirty_image_index: 0,
+			base_dirty_stroke_index: 0,
 			retractions: Vec::new(),
 			operations: Vec::new(),
 			textures,
 			retraction_count_at_save: Some(0),
-			base_dirty_stroke_index: 0,
 			selection_transformation: Default::default(),
 		}
 	}
 
-	pub fn images(&self) -> &[Object<Image>] {
+	pub fn images(&self) -> &[Tracked<Image>] {
 		self.images.as_ref()
 	}
 
@@ -324,7 +324,11 @@ impl Canvas {
 					for index in monotone_image_indices.iter().rev().copied() {
 						debug_assert!(index < self.images.len());
 						let image = self.images.remove(index);
-						antitone_index_image_pairs.push((index, image));
+						antitone_index_image_pairs.push((index, image.take()));
+					}
+
+					if let Some(index) = monotone_image_indices.first() {
+						self.base_dirty_image_index = self.base_dirty_image_index.min(*index);
 					}
 
 					let mut antitone_index_stroke_pairs = Vec::with_capacity(monotone_stroke_indices.len());
@@ -442,9 +446,13 @@ impl Canvas {
 					let mut monotone_image_indices = Vec::with_capacity(antitone_index_image_pairs.len());
 
 					for (index, image) in antitone_index_image_pairs.into_iter().rev() {
-						debug_assert!(index <= self.strokes.len());
-						self.images.insert(index, image);
+						debug_assert!(index <= self.images.len());
+						self.images.insert(index, image.into());
 						monotone_image_indices.push(index);
+					}
+
+					if let Some(index) = monotone_image_indices.first() {
+						self.base_dirty_image_index = self.base_dirty_image_index.min(*index);
 					}
 
 					let mut monotone_stroke_indices = Vec::with_capacity(antitone_index_stroke_pairs.len());
@@ -545,8 +553,8 @@ impl Canvas {
 		let alpha_hat = (selection_corners[1] - selection_corners[0]).normalized();
 		let beta_hat = (selection_corners[3] - selection_corners[0]).normalized();
 		for image in self.images.iter_mut() {
-			let image_corners = [-image.object.dimensions, image.object.dimensions.flip::<1>(), image.object.dimensions, image.object.dimensions.flip::<0>()].map(|v| ((v * 0.5).rotate(image.orientation) * image.dilation) + image.position);
-			let image_semidimensions = image.object.dimensions * 0.5 * image.dilation;
+			let image_corners = [-image.dimensions, image.dimensions.flip::<1>(), image.dimensions, image.dimensions.flip::<0>()].map(|v| ((v * 0.5).rotate(image.orientation) * image.dilation) + image.position);
+			let image_semidimensions = image.dimensions * 0.5 * image.dilation;
 			let gamma_hat = (image_corners[1] - image_corners[0]).normalized();
 			let delta_hat = (image_corners[3] - image_corners[0]).normalized();
 			// I'm so sorry for this, I promise I'll clean it up later :(

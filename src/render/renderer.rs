@@ -11,7 +11,7 @@ use fast_srgb8::srgb8_to_f32;
 use pollster::FutureExt;
 use raw_window_handle::{HasRawDisplayHandle, HasRawWindowHandle};
 
-use super::{instance_renderer::InstanceRenderer, stroke_renderer::StrokeRenderer, texture::Texture, uniform_buffer::UniformBuffer, vertex_attributes::VertexAttributes, vertex_renderer::VertexRenderer};
+use super::{instance_renderer::InstanceRenderer, stroke_renderer::CanvasRenderer, texture::Texture, uniform_buffer::UniformBuffer, vertex_attributes::VertexAttributes};
 use crate::{
 	canvas::{Canvas, IncompleteStroke},
 	utility::{Px, Vex, Vx},
@@ -20,18 +20,14 @@ use crate::{
 const SHOULD_MULTISAMPLE: bool = false;
 
 pub enum DrawCommand {
-	Trimesh { vertices: Vec<Vertex>, indices: Vec<u32> },
 	Card { position: Vex<2, Px>, dimensions: Vex<2, Px>, color: [u8; 4], radius: Px },
 	ColorSelector { position: Vex<2, Px>, hsv: [f32; 3], trigon_radius: Px, hole_radius: Px, ring_width: Px },
-	Texture { position: Vex<2, Vx>, dimensions: Vex<2, Vx>, orientation: f32, dilation: f32, index: usize },
 }
 
 pub enum RenderCommand {
-	Trimesh(Range<u32>),
 	Card(Range<u32>),
 	ColorRing(Range<u32>),
 	ColorTrigon(Range<u32>),
-	Texture(Range<u32>, usize),
 }
 
 // This struct stores the data of each vertex to be rendered.
@@ -54,21 +50,6 @@ pub struct ViewportUniform {
 	pub size: [f32; 2],
 	pub scale: f32,
 	pub tilt: f32,
-}
-
-#[repr(C)]
-#[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
-struct CanvasImageInstance {
-	pub position: [f32; 2],
-	pub orientation: f32,
-	pub dilation: f32,
-	pub dimensions: [f32; 2],
-	pub sprite_position: [f32; 2],
-	pub sprite_dimensions: [f32; 2],
-}
-
-impl VertexAttributes<6> for CanvasImageInstance {
-	const ATTRIBUTES: [wgpu::VertexAttribute; 6] = wgpu::vertex_attr_array![0 => Float32x2, 1 => Float32, 2 => Float32, 3 => Float32x2, 4 => Float32x2, 5 => Float32x2];
 }
 
 #[repr(C)]
@@ -124,9 +105,7 @@ pub struct Renderer {
 	text_atlas: glyphon::TextAtlas,
 	buffer: glyphon::Buffer,
 	swash_cache: glyphon::SwashCache,
-	stroke_renderer: StrokeRenderer,
-	trigon_renderer: VertexRenderer<Vertex>,
-	canvas_image_renderer: InstanceRenderer<CanvasImageInstance>,
+	canvas_renderer: CanvasRenderer,
 	card_renderer: InstanceRenderer<CardInstance>,
 	color_ring_renderer: InstanceRenderer<ColorRingInstance>,
 	color_trigon_renderer: InstanceRenderer<ColorTrigonInstance>,
@@ -231,17 +210,7 @@ impl Renderer {
 
 		let sample_count = multisample_texture.as_ref().map_or_else(|| 1, |_| 4);
 
-		let stroke_renderer = StrokeRenderer::new(&device, config.format, include_str!("shaders/stroke_trigon.wgsl"), "vs_main", "fs_main", &viewport_buffer, sample_count);
-		let trigon_renderer = VertexRenderer::new(&device, config.format, include_str!("shaders/trigon.wgsl"), "vs_main", "fs_main", &viewport_buffer, sample_count);
-		let canvas_image_renderer = InstanceRenderer::new(
-			&device,
-			config.format,
-			include_str!("shaders/canvas_image.wgsl"),
-			"vs_main",
-			"fs_main",
-			&[&viewport_buffer.bind_group_layout, &texture_bind_group_layout],
-			sample_count,
-		);
+		let canvas_renderer = CanvasRenderer::new(&device, config.format, &viewport_buffer, sample_count);
 		let card_renderer = InstanceRenderer::new(&device, config.format, include_str!("shaders/round_rectangle.wgsl"), "vs_main", "fs_main", &[&viewport_buffer.bind_group_layout], sample_count);
 		let color_ring_renderer = InstanceRenderer::new(&device, config.format, include_str!("shaders/color_picker_ring.wgsl"), "vs_main", "fs_main", &[&viewport_buffer.bind_group_layout], sample_count);
 		let color_trigon_renderer = InstanceRenderer::new(&device, config.format, include_str!("shaders/color_picker_trigon.wgsl"), "vs_main", "fs_main", &[&viewport_buffer.bind_group_layout], sample_count);
@@ -261,9 +230,7 @@ impl Renderer {
 			text_atlas,
 			buffer,
 			swash_cache,
-			stroke_renderer,
-			trigon_renderer,
-			canvas_image_renderer,
+			canvas_renderer,
 			card_renderer,
 			color_ring_renderer,
 			color_trigon_renderer,
@@ -313,7 +280,7 @@ impl Renderer {
 			self.is_pending_resize = false;
 		}
 
-		let stroke_trigon_index_range = self.stroke_renderer.prepare(&self.device, &self.queue, canvas, current_stroke);
+		let canvas_render_key = self.canvas_renderer.prepare(&self.device, &self.queue, canvas, current_stroke);
 
 		// We compute the background color of the canvas.
 		let background_color = {
@@ -321,9 +288,6 @@ impl Renderer {
 			wgpu::Color { r, g, b, a }
 		};
 
-		let mut canvas_image_instances: Vec<CanvasImageInstance> = vec![];
-		let mut strokes_vertices: Vec<Vertex> = vec![];
-		let mut strokes_indices: Vec<u32> = vec![];
 		let mut card_instances: Vec<CardInstance> = vec![];
 		let mut color_ring_instances: Vec<ColorRingInstance> = vec![];
 		let mut color_trigon_instances: Vec<ColorTrigonInstance> = vec![];
@@ -332,13 +296,6 @@ impl Renderer {
 
 		for draw_command in draw_commands {
 			match draw_command {
-				DrawCommand::Trimesh { mut vertices, indices } => {
-					let vertex_start = strokes_vertices.len() as u32;
-					let index_start = strokes_indices.len() as u32;
-					strokes_vertices.append(&mut vertices);
-					strokes_indices.extend(indices.into_iter().map(|i| vertex_start + i));
-					render_commands.push(RenderCommand::Trimesh(index_start..strokes_indices.len() as u32));
-				},
 				DrawCommand::Card { position, dimensions, color, radius } => {
 					let instance_start = card_instances.len() as u32;
 					card_instances.push(CardInstance {
@@ -373,36 +330,14 @@ impl Renderer {
 					});
 					render_commands.push(RenderCommand::ColorTrigon(trigon_instance_start..trigon_instance_start + 1));
 				},
-				DrawCommand::Texture {
-					index,
-					position,
-					orientation,
-					dilation,
-					dimensions,
-				} => {
-					if let Some(texture) = canvas.textures.get(index) {
-						let instance_start = canvas_image_instances.len() as u32;
-						canvas_image_instances.push(CanvasImageInstance {
-							position: position.0.map(|Vx(x)| x),
-							orientation,
-							dilation,
-							dimensions: dimensions.0.map(|Vx(x)| x),
-							sprite_position: [0.; 2],
-							sprite_dimensions: [texture.extent.width as f32, texture.extent.height as f32],
-						});
-						render_commands.push(RenderCommand::Texture(instance_start..instance_start + 1, index));
-					}
-				},
 			}
 		}
 
 		let should_render_test_text = canvas.strokes.is_empty() && canvas.images.is_empty();
 
-		self.canvas_image_renderer.prepare(&self.device, &self.queue, &canvas_image_instances);
-		self.trigon_renderer.prepare(&self.device, &self.queue, &strokes_vertices, &strokes_indices);
-		self.card_renderer.prepare(&self.device, &self.queue, &card_instances);
-		self.color_ring_renderer.prepare(&self.device, &self.queue, &color_ring_instances);
-		self.color_trigon_renderer.prepare(&self.device, &self.queue, &color_trigon_instances);
+		self.card_renderer.prepare(&self.device, &self.queue, 0, &card_instances);
+		self.color_ring_renderer.prepare(&self.device, &self.queue, 0, &color_ring_instances);
+		self.color_trigon_renderer.prepare(&self.device, &self.queue, 0, &color_trigon_instances);
 
 		for texture in canvas.textures.iter_mut() {
 			texture.prepare(&self.queue);
@@ -472,18 +407,13 @@ impl Renderer {
 
 		self.viewport_buffer.activate(&mut render_pass, 0);
 
-		self.stroke_renderer.render(&mut render_pass, stroke_trigon_index_range);
+		self.canvas_renderer.render(&mut render_pass, &canvas.textures, canvas_render_key);
 
 		for render_command in render_commands {
 			match render_command {
-				RenderCommand::Trimesh(index_range) => self.trigon_renderer.render(&mut render_pass, index_range),
 				RenderCommand::Card(instance_range) => self.card_renderer.render(&mut render_pass, instance_range),
 				RenderCommand::ColorRing(instance_range) => self.color_ring_renderer.render(&mut render_pass, instance_range),
 				RenderCommand::ColorTrigon(instance_range) => self.color_trigon_renderer.render(&mut render_pass, instance_range),
-				RenderCommand::Texture(instance_range, index) => {
-					canvas.textures[index].activate(&mut render_pass, 1);
-					self.canvas_image_renderer.render(&mut render_pass, instance_range);
-				},
 			}
 		}
 

@@ -9,7 +9,7 @@ use enumset::EnumSet;
 
 use crate::{
 	app::{App, ClipboardContents, PreFullscreenState},
-	canvas::{Canvas, Image, Object, Operation, Stroke},
+	canvas::{Canvas, Image, Operation, Stroke},
 	clipboard::ClipboardData,
 	file::{load_canvas_from_file, save_canvas_to_file},
 	input::{
@@ -164,7 +164,7 @@ fn delete_selected_items(app: &mut App) {
 
 	let selected_stroke_indices = app.canvas.strokes().iter().enumerate().filter_map(|(index, stroke)| if stroke.is_selected { Some(index) } else { None }).collect::<Vec<_>>();
 
-	if !selected_stroke_indices.is_empty() {
+	if !selected_image_indices.is_empty() || !selected_stroke_indices.is_empty() {
 		app.canvas.perform_operation(Operation::DeleteObjects {
 			monotone_image_indices: selected_image_indices,
 			monotone_stroke_indices: selected_stroke_indices,
@@ -233,9 +233,9 @@ fn cut(app: &mut App) {
 			if image.is_selected {
 				Some((
 					index,
-					Object {
+					Image {
 						position: image.position - offset,
-						..image.clone()
+						..(*image).clone()
 					},
 				))
 			} else {
@@ -286,9 +286,9 @@ fn copy(app: &mut App) {
 		.iter()
 		.filter_map(|image| {
 			if image.is_selected {
-				Some(Object {
+				Some(Image {
 					position: image.position - offset,
-					..image.clone()
+					..(*image).clone()
 				})
 			} else {
 				None
@@ -331,10 +331,13 @@ fn paste(app: &mut App) {
 					app.canvas.perform_operation(Operation::CommitImages {
 						images: images
 							.iter()
-							.map(|stroke| Object {
-								position: stroke.position + offset,
-								is_selected: true,
-								..stroke.clone()
+							.map(|image| {
+								Image {
+									position: image.position + offset,
+									is_selected: true,
+									..image.clone()
+								}
+								.into()
 							})
 							.collect(),
 					})
@@ -361,16 +364,15 @@ fn paste(app: &mut App) {
 			let texture_index = app.canvas.push_texture(&app.renderer, dimensions, data);
 
 			app.canvas.perform_operation(Operation::CommitImages {
-				images: vec![Object {
-					object: Image {
-						texture_index,
-						dimensions: Vex(dimensions.map(|x| Vx(x as f32))),
-					},
+				images: vec![Image {
+					texture_index,
+					dimensions: Vex(dimensions.map(|x| Vx(x as f32))),
 					position: app.canvas.view.position,
 					orientation: app.canvas.view.tilt,
 					dilation: 1.,
 					is_selected: false,
-				}],
+				}
+				.into()],
 			});
 		},
 		_ => {},

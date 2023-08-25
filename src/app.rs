@@ -21,13 +21,13 @@ use crate::input::linux::*;
 use crate::input::wintab::*;
 use crate::{
 	actions::default_keymap,
-	canvas::{Canvas, Image, IncompleteStroke, Object, Operation, Stroke},
+	canvas::{Canvas, Image, IncompleteStroke, Operation, Stroke},
 	clipboard::Clipboard,
 	input::{
 		keymap::{execute_keymap, Keymap},
 		Button, InputMonitor, Key,
 	},
-	render::{stroke_renderer::SelectionTransformation, DrawCommand, Renderer, Vertex},
+	render::{stroke_renderer::SelectionTransformation, DrawCommand, Renderer},
 	tools::*,
 	utility::{Lx, Px, Scale, Vex, Zero, Zoom, *},
 	APP_NAME_CAPITALIZED,
@@ -42,7 +42,7 @@ const OUTLINE_WIDTH: Lx = Lx(2.);
 const SATURATION_VALUE_WINDOW_DIAMETER: Lx = Lx(8.);
 
 pub enum ClipboardContents {
-	Subcanvas(Vec<Object<Image>>, Vec<Stroke>),
+	Subcanvas(Vec<Image>, Vec<Stroke>),
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -238,70 +238,6 @@ impl App {
 
 		let semidimensions = Vex([self.renderer.config.width as f32 / 2., self.renderer.config.height as f32 / 2.].map(Px)).s(self.scale).z(self.canvas.view.zoom);
 		let cursor_virtual_position = (self.cursor_physical_position.s(self.scale).z(self.canvas.view.zoom) - semidimensions).rotate(self.canvas.view.tilt);
-
-		// Draw brushstrokes and images.
-		{
-			let mut overlay_vertices = vec![];
-			let mut overlay_indices = vec![];
-
-			for image in self.canvas.images.iter() {
-				if !image.is_selected {
-					draw_commands.push(DrawCommand::Texture {
-						position: image.position,
-						orientation: image.orientation,
-						dilation: image.dilation,
-						dimensions: image.object.dimensions,
-						index: image.object.texture_index,
-					});
-				} else {
-					draw_commands.push(DrawCommand::Texture {
-						position: image
-							.position
-							.rotate_about(self.canvas.selection_transformation.center_of_transformation, self.canvas.selection_transformation.rotation)
-							.dilate_about(self.canvas.selection_transformation.center_of_transformation, self.canvas.selection_transformation.dilation)
-							+ self.canvas.selection_transformation.translation,
-						orientation: image.orientation + self.canvas.selection_transformation.rotation,
-						dilation: image.dilation * self.canvas.selection_transformation.dilation,
-						dimensions: image.object.dimensions,
-						index: image.object.texture_index,
-					});
-
-					const OVERLAY_COLOR: [u8; 4] = [0x28, 0xc2, 0xff, 0x7f];
-					let base_index = overlay_vertices.len();
-					let semidimensions = image.object.dimensions * 0.5;
-					overlay_vertices.push(Vertex {
-						position: (image
-							.position
-							.rotate_about(self.canvas.selection_transformation.center_of_transformation, self.canvas.selection_transformation.rotation)
-							.dilate_about(self.canvas.selection_transformation.center_of_transformation, self.canvas.selection_transformation.dilation)
-							+ self.canvas.selection_transformation.translation)
-							.0,
-						polarity: 0.,
-						color: OVERLAY_COLOR.map(srgb8_to_f32),
-					});
-					overlay_vertices.extend(
-						[-semidimensions, semidimensions.flip::<1>(), semidimensions, semidimensions.flip::<0>()]
-							.map(|v| v.rotate(image.orientation) * image.dilation + image.position)
-							.map(|v| {
-								v.rotate_about(self.canvas.selection_transformation.center_of_transformation, self.canvas.selection_transformation.rotation)
-									.dilate_about(self.canvas.selection_transformation.center_of_transformation, self.canvas.selection_transformation.dilation)
-									+ self.canvas.selection_transformation.translation
-							})
-							.map(|v| Vertex {
-								position: v.0,
-								polarity: 1.,
-								color: OVERLAY_COLOR.map(srgb8_to_f32),
-							}),
-					);
-					overlay_indices.extend([0, 1, 2, 0, 2, 3, 0, 3, 4, 0, 4, 1].map(|n| n + base_index as u32));
-				}
-			}
-
-			draw_commands.push(DrawCommand::Trimesh {
-				vertices: overlay_vertices,
-				indices: overlay_indices,
-			});
-		}
 
 		match &self.mode_stack.base_mode {
 			Tool::Move { origin: Some(origin) } => {

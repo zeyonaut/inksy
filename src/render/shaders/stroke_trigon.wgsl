@@ -60,13 +60,18 @@ fn srgb_to_linear(color: vec3f) -> vec3f {
 @vertex
 fn vs_main(vertex: Vertex) -> ClipVertex {
 	var out: ClipVertex;
+
 	let extension = extensions[vertex.extension_index];
+
 	let transformed_position = extension.translation + rotate(vertex.position, extension.rotation) * extension.dilation;
 	let selection_transformed_position = selection_transformation.translation + conform_about(transformed_position, selection_transformation.center_of_transformation, selection_transformation.rotation, selection_transformation.dilation);
+	
 	let position = (1. - extension.is_selected) * transformed_position + extension.is_selected * selection_transformed_position;
-	out.position = vec4f(rotate((position - viewport.position) * viewport.scale, -viewport.tilt) / viewport.size * vec2f(2., -2.), 0., 1.);
+
+	out.position = vec4(rotate((position - viewport.position) * viewport.scale, -viewport.tilt) / viewport.size * vec2(2., -2.), 0., 1.);
 	out.color = (1. - extension.is_selected) * extension.color + extension.is_selected * (0.25 * extension.color + 0.75 * srgb_to_linear(vec3f(0x28./0xff., 0xc2./0xff., 0xff./0xff.)));
 	out.polarity = vertex.polarity;
+	
 	return out;
 }
 

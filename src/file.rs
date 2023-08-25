@@ -12,7 +12,7 @@ use std::{
 };
 
 use crate::{
-	canvas::{Canvas, Image, Object, Point, Stroke, View},
+	canvas::{Canvas, Image, Point, Stroke, View},
 	render::Renderer,
 	utility::{Vex, Vx, Zoom, HSV, SRGBA8},
 };
@@ -96,8 +96,8 @@ fn save_canvas_to_file_inner(canvas: &Canvas, renderer: &Renderer, file_path: &P
 		let position: [f32; 2] = [image.position[0].0, image.position[1].0];
 		let orientation: f32 = image.orientation;
 		let dilation: f32 = image.dilation;
-		let texture_index: u64 = u64::try_from(image.object.texture_index).ok()?;
-		let dimensions: [f32; 2] = [image.object.dimensions[0].0, image.object.dimensions[1].0];
+		let texture_index: u64 = u64::try_from(image.texture_index).ok()?;
+		let dimensions: [f32; 2] = [image.dimensions[0].0, image.dimensions[1].0];
 
 		file.write_all(&position[0].to_le_bytes()).ok()?;
 		file.write_all(&position[1].to_le_bytes()).ok()?;
@@ -180,16 +180,17 @@ pub fn load_canvas_from_file(renderer: &mut Renderer, file_path: PathBuf) -> Opt
 		let [texture_index] = read_u64s(&mut file)?;
 		let dimensions = read_f32s::<2>(&mut file)?;
 
-		images.push(Object {
-			object: Image {
+		images.push(
+			Image {
 				texture_index: usize::try_from(texture_index).ok()?,
 				dimensions: Vex(dimensions.map(Vx)),
-			},
-			position: Vex(position.map(Vx)),
-			orientation,
-			dilation,
-			is_selected: false,
-		});
+				position: Vex(position.map(Vx)),
+				orientation,
+				dilation,
+				is_selected: false,
+			}
+			.into(),
+		);
 	}
 
 	let mut textures = Vec::with_capacity((texture_count as usize).min(128));
