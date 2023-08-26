@@ -7,7 +7,6 @@
 
 use std::time::{Duration, Instant};
 
-use fast_srgb8::srgb8_to_f32;
 use winit::{
 	dpi::{PhysicalPosition, PhysicalSize},
 	event::*,
@@ -23,13 +22,14 @@ use crate::{
 	actions::default_keymap,
 	canvas::{Canvas, Image, IncompleteStroke, Operation, Stroke},
 	clipboard::Clipboard,
+	config::Config,
 	input::{
 		keymap::{execute_keymap, Keymap},
 		Button, InputMonitor, Key,
 	},
 	render::{stroke_renderer::SelectionTransformation, DrawCommand, Renderer},
 	tools::*,
-	utility::{Lx, Px, Scale, Vex, Zero, Zoom, *},
+	utility::{Lx, Px, Scale, Vex, Zero, Zoom},
 	APP_NAME_CAPITALIZED,
 };
 
@@ -53,6 +53,7 @@ pub enum PreFullscreenState {
 
 // Current state of our app.
 pub struct App {
+	pub config: Config,
 	pub window: winit::window::Window,
 	pub clipboard: Clipboard,
 	pub pending_resize: Option<winit::dpi::PhysicalSize<u32>>,
@@ -69,7 +70,6 @@ pub struct App {
 	pub last_frame_instant: std::time::Instant,
 	pub input_monitor: InputMonitor,
 	pub keymap: Keymap,
-	pub current_color: HSV,
 	pub clipboard_contents: Option<ClipboardContents>,
 	pub pre_fullscreen_state: Option<PreFullscreenState>,
 }
@@ -77,6 +77,7 @@ pub struct App {
 impl App {
 	// Sets up the logger and renderer.
 	pub fn new(event_loop: &EventLoop<()>) -> Self {
+		let config = Config::load().unwrap_or_default();
 		let keymap = default_keymap();
 
 		// Create a window.
@@ -103,12 +104,13 @@ impl App {
 		let renderer = Renderer::new(&window, size.width, size.height, scale_factor);
 
 		// Make the window visible and immediately clear color to prevent a flash.
+		let clear_color = config.default_canvas_color.opaque().to_lrgba().0.map(f64::from);
 		let output = renderer
 			.clear(wgpu::Color {
-				r: srgb8_to_f32(0x12) as f64,
-				g: srgb8_to_f32(0x12) as f64,
-				b: srgb8_to_f32(0x12) as f64,
-				a: srgb8_to_f32(0xff) as f64,
+				r: clear_color[0],
+				g: clear_color[1],
+				b: clear_color[2],
+				a: clear_color[3],
 			})
 			.unwrap();
 		window.set_visible(true);
@@ -127,15 +129,15 @@ impl App {
 			is_cursor_relevant: false,
 			tablet_context,
 			pressure: None,
-			canvas: Canvas::new(HSV([0., 0., 0.07])),
+			canvas: Canvas::new(&config),
 			was_canvas_saved: false,
 			mode_stack: ModeStack::new(Tool::Draw { current_stroke: None }),
 			last_frame_instant: Instant::now() - Duration::new(1, 0),
 			input_monitor: InputMonitor::new(),
 			keymap,
-			current_color: HSV([2. / 3., 0.016, 1.]),
 			clipboard_contents: None,
 			pre_fullscreen_state: None,
+			config,
 		}
 	}
 
@@ -300,7 +302,7 @@ impl App {
 					color: [0x00, 0x00, 0x00, 0xff],
 					radius: hue_frame_width / 2.,
 				});
-				let srgba8 = self.current_color.to_srgb().to_srgba8();
+				let srgba8 = self.canvas.stroke_color.to_srgb().to_srgb8().opaque();
 				draw_commands.push(DrawCommand::Card {
 					position: center.map(|x| x - hue_window_width / 2.),
 					dimensions: Vex([hue_window_width; 2]),
@@ -311,18 +313,18 @@ impl App {
 			Tool::PickColor { cursor_physical_origin: cursor_origin, .. } => {
 				draw_commands.push(DrawCommand::ColorSelector {
 					position: cursor_origin.map(|x| x - (HOLE_RADIUS + RING_WIDTH).s(self.scale)),
-					hsv: self.current_color.0,
+					hsv: self.canvas.stroke_color.0,
 					trigon_radius: TRIGON_RADIUS.s(self.scale),
 					hole_radius: HOLE_RADIUS.s(self.scale),
 					ring_width: RING_WIDTH.s(self.scale),
 				});
 
-				let srgba8 = self.current_color.to_srgb().to_srgba8();
+				let srgba8 = self.canvas.stroke_color.to_srgb().to_srgb8().opaque();
 
 				let ring_position = cursor_origin
 					+ Vex([
-						(HOLE_RADIUS + RING_WIDTH / 2.).s(self.scale) * -(self.current_color[0] * 2. * core::f32::consts::PI).cos(),
-						(HOLE_RADIUS + RING_WIDTH / 2.).s(self.scale) * -(self.current_color[0] * 2. * core::f32::consts::PI).sin(),
+						(HOLE_RADIUS + RING_WIDTH / 2.).s(self.scale) * -(self.canvas.stroke_color[0] * 2. * core::f32::consts::PI).cos(),
+						(HOLE_RADIUS + RING_WIDTH / 2.).s(self.scale) * -(self.canvas.stroke_color[0] * 2. * core::f32::consts::PI).sin(),
 					]);
 
 				let hue_outline_width = (RING_WIDTH + 4. * OUTLINE_WIDTH).s(self.scale);
@@ -349,8 +351,8 @@ impl App {
 
 				let trigon_position = cursor_origin
 					+ Vex([
-						3.0f32.sqrt() * (self.current_color[2] - 0.5 * (self.current_color[1] * self.current_color[2] + 1.)),
-						0.5 * (1. - 3. * self.current_color[1] * self.current_color[2]),
+						3.0f32.sqrt() * (self.canvas.stroke_color[2] - 0.5 * (self.canvas.stroke_color[1] * self.canvas.stroke_color[2] + 1.)),
+						0.5 * (1. - 3. * self.canvas.stroke_color[1] * self.canvas.stroke_color[2]),
 					]) * TRIGON_RADIUS.s(self.scale);
 
 				let sv_outline_width = (SATURATION_VALUE_WINDOW_DIAMETER + (4. * OUTLINE_WIDTH)).s(self.scale);
@@ -413,8 +415,7 @@ impl App {
 				}
 				if self.input_monitor.active_buttons.contains(Left) {
 					if self.input_monitor.different_buttons.contains(Left) && current_stroke.is_none() {
-						let srgba8 = self.current_color.to_srgb().to_srgba8();
-						*current_stroke = Some(IncompleteStroke::new(cursor_virtual_position, srgba8));
+						*current_stroke = Some(IncompleteStroke::new(cursor_virtual_position, &self.canvas));
 					}
 
 					if let Some(current_stroke) = current_stroke {
@@ -663,7 +664,7 @@ impl App {
 
 					match part {
 						Some(ColorSelectionPart::Hue) => {
-							self.current_color[0] = vector.angle() / (2.0 * std::f32::consts::PI) + 0.5;
+							self.canvas.stroke_color[0] = vector.angle() / (2.0 * std::f32::consts::PI) + 0.5;
 						},
 						Some(ColorSelectionPart::SaturationValue) => {
 							let scaled_vector = vector / TRIGON_RADIUS.s(self.scale);
@@ -672,8 +673,8 @@ impl App {
 							let scaled_vector = scaled_vector + -other * (dot - dot.min(0.5));
 							let scaled_vector = Vex([scaled_vector[0].max(-3.0f32.sqrt() / 2.), scaled_vector[1].min(0.5)]);
 							let s = (1. - 2. * scaled_vector[1]) / (2. + 3.0f32.sqrt() * scaled_vector[0] - scaled_vector[1]);
-							self.current_color[1] = if s.is_nan() { 0. } else { s.clamp(0., 1.) };
-							self.current_color[2] = ((2. + 3.0f32.sqrt() * scaled_vector[0] - scaled_vector[1]) / 3.).clamp(0., 1.);
+							self.canvas.stroke_color[1] = if s.is_nan() { 0. } else { s.clamp(0., 1.) };
+							self.canvas.stroke_color[2] = ((2. + 3.0f32.sqrt() * scaled_vector[0] - scaled_vector[1]) / 3.).clamp(0., 1.);
 						},
 						None => {},
 					}

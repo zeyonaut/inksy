@@ -8,8 +8,9 @@
 use std::path::PathBuf;
 
 use crate::{
+	config::Config,
 	render::{stroke_renderer::SelectionTransformation, texture::Texture, Renderer},
-	utility::{Tracked, Vex, Vx, Vx2, Zero, Zoom, HSV, SRGBA8},
+	utility::{Tracked, Vex, Vx, Vx2, Zero, Zoom, HSV, SRGB8, SRGBA8},
 };
 
 #[derive(Clone)]
@@ -99,7 +100,7 @@ impl Stroke {
 				// We compute a unit normal.
 				let perpendicular = {
 					let forward = b.position - a.position;
-					Vex([forward[1], -forward[0]]).normalized() * STROKE_RADIUS
+					Vex([forward[1], -forward[0]]).normalized() * stroke_radius
 				};
 
 				let current_index = u32::try_from(vertices.len()).unwrap();
@@ -136,17 +137,17 @@ impl Stroke {
 pub struct IncompleteStroke {
 	pub position: Vex<2, Vx>,
 	pub color: SRGBA8,
+	pub radius: Vx,
 	pub points: Vec<Point>,
 	pub max_pressure: f32,
 }
 
-const STROKE_RADIUS: Vx = Vx(4.);
-
 impl IncompleteStroke {
-	pub fn new(position: Vex<2, Vx>, color: SRGBA8) -> Self {
+	pub fn new(position: Vex<2, Vx>, canvas: &Canvas) -> Self {
 		Self {
 			position,
-			color,
+			color: canvas.stroke_color.to_srgb().to_srgb8().opaque(),
+			radius: canvas.stroke_radius,
 			points: Vec::new(),
 			max_pressure: 0.,
 		}
@@ -154,9 +155,9 @@ impl IncompleteStroke {
 
 	pub fn add_point(&mut self, position: Vex<2, Vx>, pressure: f32) {
 		let threshold = if self.points.len() < 2 {
-			(self.max_pressure.max(pressure) * STROKE_RADIUS).max(Vx(1.))
+			(self.max_pressure.max(pressure) * self.radius).max(Vx(1.))
 		} else {
-			self.max_pressure.max(pressure) * STROKE_RADIUS.min(Vx(1.))
+			self.max_pressure.max(pressure) * self.radius.min(Vx(1.))
 		};
 		if self.points.last().map_or(true, |point| (position - point.position).norm() > threshold) {
 			self.points.push(Point { position, pressure });
@@ -181,13 +182,13 @@ impl IncompleteStroke {
 			point.pressure = self.max_pressure;
 		}
 
-		Stroke::new(self.color, STROKE_RADIUS, self.points, self.position + local_centroid, 0., 1.)
+		Stroke::new(self.color, self.radius, self.points, self.position + local_centroid, 0., 1.)
 	}
 
 	pub fn preview(&self) -> Stroke {
 		let points = if self.points.len() != 1 { self.points.clone() } else { Vec::new() };
 
-		Stroke::new(self.color, STROKE_RADIUS, points, self.position, 0., 1.)
+		Stroke::new(self.color, self.radius, points, self.position, 0., 1.)
 	}
 }
 
@@ -245,7 +246,9 @@ impl View {
 
 pub struct Canvas {
 	pub file_path: Option<PathBuf>,
-	pub background_color: HSV,
+	pub background_color: SRGB8,
+	pub stroke_color: HSV,
+	pub stroke_radius: Vx,
 	pub view: Tracked<View>,
 	pub images: Vec<Tracked<Image>>,
 	pub strokes: Vec<Tracked<Stroke>>,
@@ -260,10 +263,12 @@ pub struct Canvas {
 }
 
 impl Canvas {
-	pub fn new(background_color: HSV) -> Self {
+	pub fn new(config: &Config) -> Self {
 		Self {
 			file_path: None,
-			background_color,
+			background_color: config.default_canvas_color,
+			stroke_color: config.default_stroke_color.to_hsv(),
+			stroke_radius: config.default_stroke_radius,
 			view: View::new().into(),
 			images: Vec::new(),
 			strokes: Vec::new(),
@@ -277,10 +282,12 @@ impl Canvas {
 		}
 	}
 
-	pub fn from_file(file_path: PathBuf, background_color: HSV, view: View, images: Vec<Tracked<Image>>, strokes: Vec<Tracked<Stroke>>, textures: Vec<Texture>) -> Self {
+	pub fn from_file(file_path: PathBuf, background_color: SRGB8, stroke_color: SRGB8, stroke_radius: Vx, view: View, images: Vec<Tracked<Image>>, strokes: Vec<Tracked<Stroke>>, textures: Vec<Texture>) -> Self {
 		Self {
 			file_path: Some(file_path),
 			background_color,
+			stroke_color: stroke_color.to_hsv(),
+			stroke_radius,
 			view: view.into(),
 			images,
 			strokes,

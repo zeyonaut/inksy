@@ -92,8 +92,7 @@ fn load_from_file(app: &mut App) {
 }
 
 fn new_file(app: &mut App) {
-	// TODO: Use a default background color, rather than inheriting the previous one.
-	app.canvas = Canvas::new(app.canvas.background_color);
+	app.canvas = Canvas::new(&app.config);
 	app.update_window_title();
 }
 
@@ -393,7 +392,7 @@ fn recolor_selection(app: &mut App) {
 	if !selected_indices.is_empty() {
 		app.canvas.perform_operation(Operation::RecolorStrokes {
 			indices: selected_indices,
-			new_color: app.current_color.to_srgb().to_srgba8(),
+			new_color: app.canvas.stroke_color.to_srgb().to_srgb8().opaque(),
 		});
 	}
 }

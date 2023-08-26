@@ -14,7 +14,7 @@ use std::{
 use crate::{
 	canvas::{Canvas, Image, Point, Stroke, View},
 	render::Renderer,
-	utility::{Vex, Vx, Zoom, HSV, SRGBA8},
+	utility::{Vex, Vx, Zoom, SRGB8, SRGBA8},
 };
 
 const MAGIC_NUMBERS: [u8; 8] = [b'I', b'N', b'K', b'S', b'Y', 0, 0, 0];
@@ -47,7 +47,9 @@ fn save_canvas_to_file_inner(canvas: &Canvas, renderer: &Renderer, file_path: &P
 	file.write_all(&MAGIC_NUMBERS).ok()?;
 	file.write_all(&0u64.to_le_bytes()).ok()?;
 
-	let background_color: [f32; 3] = canvas.background_color.0;
+	let background_color: [u8; 3] = canvas.background_color.0;
+	let stroke_color: [u8; 3] = canvas.stroke_color.to_srgb().to_srgb8().0;
+	let stroke_radius: f32 = canvas.stroke_radius.0;
 	let position: [f32; 2] = [canvas.view.position[0].0, canvas.view.position[1].0];
 	let tilt: f32 = canvas.view.tilt;
 	let zoom: f32 = canvas.view.zoom.0;
@@ -55,9 +57,9 @@ fn save_canvas_to_file_inner(canvas: &Canvas, renderer: &Renderer, file_path: &P
 	let image_count: u64 = u64::try_from(canvas.images.len()).ok()?;
 	let texture_count: u64 = u64::try_from(canvas.textures.len()).ok()?;
 
-	file.write_all(&background_color[0].to_le_bytes()).ok()?;
-	file.write_all(&background_color[1].to_le_bytes()).ok()?;
-	file.write_all(&background_color[2].to_le_bytes()).ok()?;
+	file.write_all(&background_color).ok()?;
+	file.write_all(&stroke_color).ok()?;
+	file.write_all(&stroke_radius.to_le_bytes()).ok()?;
 	file.write_all(&position[0].to_le_bytes()).ok()?;
 	file.write_all(&position[1].to_le_bytes()).ok()?;
 	file.write_all(&tilt.to_le_bytes()).ok()?;
@@ -149,7 +151,9 @@ pub fn load_canvas_from_file(renderer: &mut Renderer, file_path: PathBuf) -> Opt
 		return None;
 	}
 
-	let background_color = read_f32s::<3>(&mut file)?;
+	let background_color = read_u8s::<3>(&mut file)?;
+	let stroke_color = read_u8s::<3>(&mut file)?;
+	let [stroke_radius] = read_f32s::<1>(&mut file)?;
 	let position = read_f32s::<2>(&mut file)?;
 	let [tilt, zoom] = read_f32s(&mut file)?;
 	let [stroke_count, image_count, texture_count] = read_u64s(&mut file)?;
@@ -203,7 +207,9 @@ pub fn load_canvas_from_file(renderer: &mut Renderer, file_path: PathBuf) -> Opt
 
 	Some(Canvas::from_file(
 		file_path,
-		HSV(background_color),
+		SRGB8(background_color),
+		SRGB8(stroke_color),
+		Vx(stroke_radius),
 		View {
 			position: Vex(position.map(Vx)),
 			tilt,

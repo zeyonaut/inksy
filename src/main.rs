@@ -5,6 +5,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
+#![feature(array_try_map)]
 #![feature(array_windows)]
 #![feature(extract_if)]
 #![feature(maybe_uninit_uninit_array_transpose)]
@@ -15,6 +16,7 @@ mod actions;
 mod app;
 mod canvas;
 mod clipboard;
+mod config;
 mod file;
 #[path = "input/_.rs"]
 mod input;

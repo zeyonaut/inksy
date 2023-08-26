@@ -294,7 +294,7 @@ impl Renderer {
 
 		// We compute the background color of the canvas.
 		let background_color = {
-			let [r, g, b, a] = canvas.background_color.to_srgb().to_srgba8().to_lrgba().0.map(|x| x as f64);
+			let [r, g, b, a] = canvas.background_color.opaque().to_lrgba().0.map(|x| x as f64);
 			wgpu::Color { r, g, b, a }
 		};
 
