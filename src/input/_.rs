@@ -59,6 +59,8 @@ pub enum Key {
 	Tab,
 	Control,
 	Shift,
+	LeftArrow,
+	RightArrow,
 }
 
 #[derive(EnumSetType)]
@@ -137,6 +139,8 @@ impl InputMonitor {
 				VirtualKeyCode::RShift => Shift,
 				VirtualKeyCode::LControl => Control,
 				VirtualKeyCode::RControl => Control,
+				VirtualKeyCode::Left => LeftArrow,
+				VirtualKeyCode::Right => RightArrow,
 				_ => return,
 			};
 			let is_active = keyboard_input.state == ElementState::Pressed;

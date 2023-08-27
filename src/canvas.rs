@@ -301,6 +301,12 @@ impl Canvas {
 		}
 	}
 
+	pub fn invalidate(&mut self) {
+		self.view.invalidate();
+		self.base_dirty_image_index = 0;
+		self.base_dirty_stroke_index = 0;
+	}
+
 	pub fn images(&self) -> &[Tracked<Image>] {
 		self.images.as_ref()
 	}

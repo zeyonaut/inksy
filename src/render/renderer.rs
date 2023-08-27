@@ -14,6 +14,7 @@ use raw_window_handle::{HasRawDisplayHandle, HasRawWindowHandle};
 use super::{instance_renderer::InstanceRenderer, stroke_renderer::CanvasRenderer, texture::Texture, uniform_buffer::UniformBuffer, vertex_attributes::VertexAttributes};
 use crate::{
 	canvas::{Canvas, IncompleteStroke},
+	config::Config,
 	utility::{Px, Vex, Vx},
 };
 
@@ -199,7 +200,12 @@ impl Renderer {
 		let font_size = 13.;
 		let mut buffer = glyphon::Buffer::new(&mut font_system, glyphon::Metrics::new(font_size, font_size));
 		// Set the text, and resize the buffer to fit it perfectly.
-		buffer.set_text(&mut font_system, "(Draw something!)", glyphon::Attrs::new().stretch(glyphon::Stretch::Condensed), glyphon::Shaping::Basic);
+		buffer.set_text(
+			&mut font_system,
+			"Press Ctrl + N to open a new canvas or Ctrl + O to load an existing canvas.",
+			glyphon::Attrs::new().stretch(glyphon::Stretch::Condensed),
+			glyphon::Shaping::Basic,
+		);
 		buffer.set_wrap(&mut font_system, glyphon::Wrap::None);
 		let w = buffer.line_layout(&mut font_system, 0).unwrap().iter().fold(0., |a, x| a + x.w);
 		buffer.set_size(&mut font_system, w, font_size);
@@ -275,26 +281,32 @@ impl Renderer {
 
 	pub fn update(&mut self) {}
 
-	pub fn render(&mut self, canvas: &mut Canvas, current_stroke: Option<&IncompleteStroke>, draw_commands: Vec<DrawCommand>) -> Result<(), wgpu::SurfaceError> {
-		if let Some(view) = canvas.view.read_if_with_is_dirty(|is_dirty| is_dirty || self.is_pending_resize) {
-			// We write the new size to the viewport buffer.
-			self.viewport_buffer.write(
-				&self.queue,
-				ViewportUniform {
-					position: view.position.0.map(Into::into),
-					size: [self.config.width as f32, self.config.height as f32],
-					scale: view.zoom.0 * self.scale_factor,
-					tilt: view.tilt,
-				},
-			);
-			self.is_pending_resize = false;
+	pub fn render(&mut self, config: &Config, mut canvas: Option<&mut Canvas>, current_stroke: Option<&IncompleteStroke>, draw_commands: Vec<DrawCommand>) -> Result<(), wgpu::SurfaceError> {
+		if let Some(canvas) = canvas.as_mut() {
+			if let Some(view) = canvas.view.read_if_with_is_dirty(|is_dirty| is_dirty || self.is_pending_resize) {
+				// We write the new size to the viewport buffer.
+				self.viewport_buffer.write(
+					&self.queue,
+					ViewportUniform {
+						position: view.position.0.map(Into::into),
+						size: [self.config.width as f32, self.config.height as f32],
+						scale: view.zoom.0 * self.scale_factor,
+						tilt: view.tilt,
+					},
+				);
+				self.is_pending_resize = false;
+			}
+
+			for texture in canvas.textures.iter_mut() {
+				texture.prepare(&self.queue);
+			}
 		}
 
-		let canvas_render_key = self.canvas_renderer.prepare(&self.device, &self.queue, canvas, current_stroke);
+		let canvas_render_key = canvas.as_mut().map(|canvas| self.canvas_renderer.prepare(&self.device, &self.queue, canvas, current_stroke));
 
 		// We compute the background color of the canvas.
 		let background_color = {
-			let [r, g, b, a] = canvas.background_color.opaque().to_lrgba().0.map(|x| x as f64);
+			let [r, g, b, a] = canvas.as_ref().map_or(config.default_canvas_color, |canvas| canvas.background_color).opaque().to_lrgba().0.map(|x| x as f64);
 			wgpu::Color { r, g, b, a }
 		};
 
@@ -343,15 +355,11 @@ impl Renderer {
 			}
 		}
 
-		let should_render_test_text = canvas.strokes.is_empty() && canvas.images.is_empty();
+		let should_render_test_text = canvas.is_none();
 
 		self.card_renderer.prepare(&self.device, &self.queue, 0, &card_instances);
 		self.color_ring_renderer.prepare(&self.device, &self.queue, 0, &color_ring_instances);
 		self.color_trigon_renderer.prepare(&self.device, &self.queue, 0, &color_trigon_instances);
-
-		for texture in canvas.textures.iter_mut() {
-			texture.prepare(&self.queue);
-		}
 
 		// Display the text in the center of the screen.
 		let buffer_size = self.buffer.size();
@@ -417,7 +425,9 @@ impl Renderer {
 
 		self.viewport_buffer.activate(&mut render_pass, 0);
 
-		self.canvas_renderer.render(&mut render_pass, &canvas.textures, canvas_render_key);
+		if let (Some(canvas), Some(canvas_render_key)) = (canvas, canvas_render_key) {
+			self.canvas_renderer.render(&mut render_pass, &canvas.textures, canvas_render_key);
+		}
 
 		for render_command in render_commands {
 			match render_command {

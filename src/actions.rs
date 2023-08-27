@@ -29,6 +29,9 @@ pub fn default_keymap() -> Keymap {
 	keymap.insert(Control, S, false, trigger(save_file));
 	keymap.insert(Control, O, false, trigger(load_from_file));
 	keymap.insert(Control, N, false, trigger(new_file));
+	keymap.insert(Control, W, false, trigger(close_tab));
+	keymap.insert(Control, LeftArrow, false, trigger(switch_tab_left));
+	keymap.insert(Control, RightArrow, false, trigger(switch_tab_right));
 	keymap.insert(NONE, B, false, trigger(choose_draw_tool));
 	keymap.insert(NONE, Backspace, false, trigger(delete_selected_items));
 	keymap.insert(Control | Shift, F, false, trigger(toggle_fullscreen));
@@ -66,33 +69,78 @@ pub fn discovery(on_press: fn(&mut App), on_release: fn(&mut App)) -> Action {
 // Actions:
 
 fn save_as_file(app: &mut App) {
-	if let Some(file_path) = rfd::FileDialog::new().add_filter("Inksy", &["inksy"]).save_file() {
-		app.canvas.file_path = Some(file_path);
-		save_canvas_to_file(&app.canvas, &app.renderer).expect("Failed to save canvas.");
-		app.canvas.set_retraction_count_at_save();
+	if let Some(canvas) = app.current_canvas_index.and_then(|x| app.canvases.get_mut(x)) {
+		if let Some(file_path) = rfd::FileDialog::new().add_filter("Inksy", &["inksy"]).save_file() {
+			canvas.file_path = Some(file_path);
+			save_canvas_to_file(canvas, &app.renderer).expect("Failed to save canvas.");
+			canvas.set_retraction_count_at_save();
+		}
 	}
 }
 
 fn save_file(app: &mut App) {
-	if app.canvas.file_path.is_none() {
-		save_as_file(app);
-	} else {
-		save_canvas_to_file(&app.canvas, &app.renderer).expect("Failed to save canvas.");
-		app.canvas.set_retraction_count_at_save();
+	if let Some(canvas) = app.current_canvas_index.and_then(|x| app.canvases.get_mut(x)) {
+		if canvas.file_path.is_none() {
+			save_as_file(app);
+		} else {
+			save_canvas_to_file(canvas, &app.renderer).expect("Failed to save canvas.");
+			canvas.set_retraction_count_at_save();
+		}
 	}
 }
 
 fn load_from_file(app: &mut App) {
+	app.current_canvas_index.map(|current_canvas_index| app.canvases.get_mut(current_canvas_index).map(Canvas::invalidate));
 	if let Some(file_path) = rfd::FileDialog::new().add_filter("Inksy", &["inksy"]).pick_file() {
 		if let Some(canvas) = load_canvas_from_file(&mut app.renderer, file_path) {
-			app.canvas = canvas;
+			let new_canvas_index = app.current_canvas_index.map_or(0, |x| x + 1);
+			app.canvases.insert(new_canvas_index, canvas);
+			app.current_canvas_index = Some(new_canvas_index);
 		}
 	}
 	app.update_window_title();
 }
 
 fn new_file(app: &mut App) {
-	app.canvas = Canvas::new(&app.config);
+	app.current_canvas_index.map(|current_canvas_index| app.canvases.get_mut(current_canvas_index).map(Canvas::invalidate));
+	let new_canvas_index = app.current_canvas_index.map_or(0, |x| x + 1);
+	app.canvases.insert(new_canvas_index, Canvas::new(&app.config));
+	app.current_canvas_index = Some(new_canvas_index);
+	app.update_window_title();
+}
+
+fn close_tab(app: &mut App) {
+	if let Some(current_canvas_index) = app.current_canvas_index {
+		app.canvases.get_mut(current_canvas_index).map(Canvas::invalidate);
+		app.canvases.remove(current_canvas_index);
+		if current_canvas_index > 0 {
+			app.current_canvas_index = Some(current_canvas_index - 1);
+		} else {
+			if app.canvases.is_empty() {
+				app.current_canvas_index = None;
+			}
+		}
+	}
+	app.update_window_title();
+}
+
+fn switch_tab_left(app: &mut App) {
+	if let Some(current_canvas_index) = app.current_canvas_index {
+		app.canvases.get_mut(current_canvas_index).map(Canvas::invalidate);
+		if !app.canvases.is_empty() {
+			app.current_canvas_index = Some(current_canvas_index.checked_sub(1).unwrap_or(app.canvases.len() - 1));
+		}
+	}
+	app.update_window_title();
+}
+
+fn switch_tab_right(app: &mut App) {
+	if let Some(current_canvas_index) = app.current_canvas_index {
+		app.canvases.get_mut(current_canvas_index).map(Canvas::invalidate);
+		if !app.canvases.is_empty() {
+			app.current_canvas_index = Some((current_canvas_index + 1) % app.canvases.len());
+		}
+	}
 	app.update_window_title();
 }
 
@@ -159,15 +207,17 @@ fn release_color_picker_tool(app: &mut App) {
 }
 
 fn delete_selected_items(app: &mut App) {
-	let selected_image_indices = app.canvas.images().iter().enumerate().filter_map(|(index, image)| if image.is_selected { Some(index) } else { None }).collect::<Vec<_>>();
+	if let Some(canvas) = app.current_canvas_index.and_then(|x| app.canvases.get_mut(x)) {
+		let selected_image_indices = canvas.images().iter().enumerate().filter_map(|(index, image)| if image.is_selected { Some(index) } else { None }).collect::<Vec<_>>();
 
-	let selected_stroke_indices = app.canvas.strokes().iter().enumerate().filter_map(|(index, stroke)| if stroke.is_selected { Some(index) } else { None }).collect::<Vec<_>>();
+		let selected_stroke_indices = canvas.strokes().iter().enumerate().filter_map(|(index, stroke)| if stroke.is_selected { Some(index) } else { None }).collect::<Vec<_>>();
 
-	if !selected_image_indices.is_empty() || !selected_stroke_indices.is_empty() {
-		app.canvas.perform_operation(Operation::DeleteObjects {
-			monotone_image_indices: selected_image_indices,
-			monotone_stroke_indices: selected_stroke_indices,
-		});
+		if !selected_image_indices.is_empty() || !selected_stroke_indices.is_empty() {
+			canvas.perform_operation(Operation::DeleteObjects {
+				monotone_image_indices: selected_image_indices,
+				monotone_stroke_indices: selected_stroke_indices,
+			});
+		}
 	}
 }
 
@@ -206,7 +256,9 @@ fn undo(app: &mut App) {
 	if app.mode_stack.is_drafting() {
 		app.mode_stack.discard_draft();
 	} else {
-		app.canvas.undo();
+		if let Some(canvas) = app.current_canvas_index.and_then(|x| app.canvases.get_mut(x)) {
+			canvas.undo();
+		}
 	}
 }
 
@@ -214,185 +266,195 @@ fn redo(app: &mut App) {
 	if app.mode_stack.is_drafting() {
 		app.mode_stack.discard_draft();
 	} else {
-		app.canvas.redo();
+		if let Some(canvas) = app.current_canvas_index.and_then(|x| app.canvases.get_mut(x)) {
+			canvas.redo();
+		}
 	}
 }
 
 fn cut(app: &mut App) {
-	let semidimensions = Vex([app.renderer.config.width as f32 / 2., app.renderer.config.height as f32 / 2.].map(Px)).s(app.scale).z(app.canvas.view.zoom);
-	let cursor_virtual_position = (app.cursor_physical_position.s(app.scale).z(app.canvas.view.zoom) - semidimensions).rotate(-app.canvas.view.tilt);
-	let offset = cursor_virtual_position + app.canvas.view.position;
+	if let Some(canvas) = app.current_canvas_index.and_then(|x| app.canvases.get_mut(x)) {
+		let semidimensions = Vex([app.renderer.config.width as f32 / 2., app.renderer.config.height as f32 / 2.].map(Px)).s(app.scale).z(canvas.view.zoom);
+		let cursor_virtual_position = (app.cursor_physical_position.s(app.scale).z(canvas.view.zoom) - semidimensions).rotate(-canvas.view.tilt);
+		let offset = cursor_virtual_position + canvas.view.position;
 
-	let (image_indices, images): (Vec<_>, Vec<_>) = app
-		.canvas
-		.images()
-		.iter()
-		.enumerate()
-		.filter_map(|(index, image)| {
-			if image.is_selected {
-				Some((
-					index,
-					Image {
-						position: image.position - offset,
-						..(*image).clone()
-					},
-				))
-			} else {
-				None
-			}
-		})
-		.unzip();
+		let (image_indices, images): (Vec<_>, Vec<_>) = canvas
+			.images()
+			.iter()
+			.enumerate()
+			.filter_map(|(index, image)| {
+				if image.is_selected {
+					Some((
+						index,
+						Image {
+							position: image.position - offset,
+							..(*image).clone()
+						},
+					))
+				} else {
+					None
+				}
+			})
+			.unzip();
 
-	let (stroke_indices, strokes): (Vec<_>, Vec<_>) = app
-		.canvas
-		.strokes()
-		.iter()
-		.enumerate()
-		.filter_map(|(index, stroke)| {
-			if stroke.is_selected {
-				Some((
-					index,
-					Stroke {
-						position: stroke.position - offset,
-						..(*stroke).clone()
-					},
-				))
-			} else {
-				None
-			}
-		})
-		.unzip();
+		let (stroke_indices, strokes): (Vec<_>, Vec<_>) = canvas
+			.strokes()
+			.iter()
+			.enumerate()
+			.filter_map(|(index, stroke)| {
+				if stroke.is_selected {
+					Some((
+						index,
+						Stroke {
+							position: stroke.position - offset,
+							..(*stroke).clone()
+						},
+					))
+				} else {
+					None
+				}
+			})
+			.unzip();
 
-	if !stroke_indices.is_empty() {
-		app.canvas.perform_operation(Operation::DeleteObjects {
-			monotone_image_indices: image_indices,
-			monotone_stroke_indices: stroke_indices,
-		});
+		if !stroke_indices.is_empty() {
+			canvas.perform_operation(Operation::DeleteObjects {
+				monotone_image_indices: image_indices,
+				monotone_stroke_indices: stroke_indices,
+			});
+		}
+
+		app.clipboard_contents = Some(ClipboardContents::Subcanvas(images, strokes));
+		app.clipboard.write(ClipboardData::Custom);
 	}
-
-	app.clipboard_contents = Some(ClipboardContents::Subcanvas(images, strokes));
-	app.clipboard.write(ClipboardData::Custom);
 }
 
 fn copy(app: &mut App) {
-	let semidimensions = Vex([app.renderer.config.width as f32 / 2., app.renderer.config.height as f32 / 2.].map(Px)).s(app.scale).z(app.canvas.view.zoom);
-	let cursor_virtual_position = (app.cursor_physical_position.s(app.scale).z(app.canvas.view.zoom) - semidimensions).rotate(-app.canvas.view.tilt);
-	let offset = cursor_virtual_position + app.canvas.view.position;
+	if let Some(canvas) = app.current_canvas_index.and_then(|x| app.canvases.get(x)) {
+		let semidimensions = Vex([app.renderer.config.width as f32 / 2., app.renderer.config.height as f32 / 2.].map(Px)).s(app.scale).z(canvas.view.zoom);
+		let cursor_virtual_position = (app.cursor_physical_position.s(app.scale).z(canvas.view.zoom) - semidimensions).rotate(-canvas.view.tilt);
+		let offset = cursor_virtual_position + canvas.view.position;
 
-	let images: Vec<_> = app
-		.canvas
-		.images()
-		.iter()
-		.filter_map(|image| {
-			if image.is_selected {
-				Some(Image {
-					position: image.position - offset,
-					..(*image).clone()
-				})
-			} else {
-				None
-			}
-		})
-		.collect();
+		let images: Vec<_> = canvas
+			.images()
+			.iter()
+			.filter_map(|image| {
+				if image.is_selected {
+					Some(Image {
+						position: image.position - offset,
+						..(*image).clone()
+					})
+				} else {
+					None
+				}
+			})
+			.collect();
 
-	let strokes: Vec<_> = app
-		.canvas
-		.strokes()
-		.iter()
-		.filter_map(|stroke| {
-			if stroke.is_selected {
-				Some(Stroke {
-					position: stroke.position - offset,
-					..(*stroke).clone()
-				})
-			} else {
-				None
-			}
-		})
-		.collect();
+		let strokes: Vec<_> = canvas
+			.strokes()
+			.iter()
+			.filter_map(|stroke| {
+				if stroke.is_selected {
+					Some(Stroke {
+						position: stroke.position - offset,
+						..(*stroke).clone()
+					})
+				} else {
+					None
+				}
+			})
+			.collect();
 
-	app.clipboard_contents = Some(ClipboardContents::Subcanvas(images, strokes));
-	app.clipboard.write(ClipboardData::Custom);
+		app.clipboard_contents = Some(ClipboardContents::Subcanvas(images, strokes));
+		app.clipboard.write(ClipboardData::Custom);
+	}
 }
 
 fn paste(app: &mut App) {
-	match app.clipboard.read() {
-		Some(ClipboardData::Custom) => {
-			if let Some(ClipboardContents::Subcanvas(images, strokes)) = app.clipboard_contents.as_ref() {
-				let semidimensions = Vex([app.renderer.config.width as f32 / 2., app.renderer.config.height as f32 / 2.].map(Px)).s(app.scale).z(app.canvas.view.zoom);
-				let cursor_virtual_position = (app.cursor_physical_position.s(app.scale).z(app.canvas.view.zoom) - semidimensions).rotate(-app.canvas.view.tilt);
+	if let Some(canvas) = app.current_canvas_index.and_then(|x| app.canvases.get_mut(x)) {
+		match app.clipboard.read() {
+			Some(ClipboardData::Custom) => {
+				if let Some(ClipboardContents::Subcanvas(images, strokes)) = app.clipboard_contents.as_ref() {
+					let semidimensions = Vex([app.renderer.config.width as f32 / 2., app.renderer.config.height as f32 / 2.].map(Px)).s(app.scale).z(canvas.view.zoom);
+					let cursor_virtual_position = (app.cursor_physical_position.s(app.scale).z(canvas.view.zoom) - semidimensions).rotate(-canvas.view.tilt);
 
-				app.canvas.select_all(false);
+					canvas.select_all(false);
 
-				let offset = cursor_virtual_position + app.canvas.view.position;
+					let offset = cursor_virtual_position + canvas.view.position;
 
-				if !images.is_empty() {
-					app.canvas.perform_operation(Operation::CommitImages {
-						images: images
-							.iter()
-							.map(|image| {
-								Image {
-									position: image.position + offset,
-									is_selected: true,
-									..image.clone()
-								}
-								.into()
-							})
-							.collect(),
-					})
+					if !images.is_empty() {
+						canvas.perform_operation(Operation::CommitImages {
+							images: images
+								.iter()
+								.map(|image| {
+									Image {
+										position: image.position + offset,
+										is_selected: true,
+										..image.clone()
+									}
+									.into()
+								})
+								.collect(),
+						})
+					}
+
+					if !strokes.is_empty() {
+						canvas.perform_operation(Operation::CommitStrokes {
+							strokes: strokes
+								.iter()
+								.map(|stroke| {
+									Stroke {
+										position: stroke.position + offset,
+										is_selected: true,
+										..stroke.clone()
+									}
+									.into()
+								})
+								.collect(),
+						})
+					}
 				}
+			},
+			Some(ClipboardData::Image { dimensions, data }) => {
+				let texture_index = canvas.push_texture(&app.renderer, dimensions, data);
 
-				if !strokes.is_empty() {
-					app.canvas.perform_operation(Operation::CommitStrokes {
-						strokes: strokes
-							.iter()
-							.map(|stroke| {
-								Stroke {
-									position: stroke.position + offset,
-									is_selected: true,
-									..stroke.clone()
-								}
-								.into()
-							})
-							.collect(),
-					})
-				}
-			}
-		},
-		Some(ClipboardData::Image { dimensions, data }) => {
-			let texture_index = app.canvas.push_texture(&app.renderer, dimensions, data);
-
-			app.canvas.perform_operation(Operation::CommitImages {
-				images: vec![Image {
-					texture_index,
-					dimensions: Vex(dimensions.map(|x| Vx(x as f32))),
-					position: app.canvas.view.position,
-					orientation: app.canvas.view.tilt,
-					dilation: 1.,
-					is_selected: false,
-				}
-				.into()],
-			});
-		},
-		_ => {},
+				canvas.perform_operation(Operation::CommitImages {
+					images: vec![Image {
+						texture_index,
+						dimensions: Vex(dimensions.map(|x| Vx(x as f32))),
+						position: canvas.view.position,
+						orientation: canvas.view.tilt,
+						dilation: 1.,
+						is_selected: false,
+					}
+					.into()],
+				});
+			},
+			_ => {},
+		}
 	}
 }
 
 fn select_all(app: &mut App) {
-	app.canvas.select_all(true);
+	if let Some(canvas) = app.current_canvas_index.and_then(|x| app.canvases.get_mut(x)) {
+		canvas.select_all(true);
+	}
 }
 
 fn select_none(app: &mut App) {
-	app.canvas.select_all(false);
+	if let Some(canvas) = app.current_canvas_index.and_then(|x| app.canvases.get_mut(x)) {
+		canvas.select_all(false);
+	}
 }
 
 fn recolor_selection(app: &mut App) {
-	let selected_indices = app.canvas.strokes().iter().enumerate().filter_map(|(index, stroke)| if stroke.is_selected { Some(index) } else { None }).collect::<Vec<_>>();
+	if let Some(canvas) = app.current_canvas_index.and_then(|x| app.canvases.get_mut(x)) {
+		let selected_indices = canvas.strokes().iter().enumerate().filter_map(|(index, stroke)| if stroke.is_selected { Some(index) } else { None }).collect::<Vec<_>>();
 
-	if !selected_indices.is_empty() {
-		app.canvas.perform_operation(Operation::RecolorStrokes {
-			indices: selected_indices,
-			new_color: app.canvas.stroke_color.to_srgb().to_srgb8().opaque(),
-		});
+		if !selected_indices.is_empty() {
+			canvas.perform_operation(Operation::RecolorStrokes {
+				indices: selected_indices,
+				new_color: canvas.stroke_color.to_srgb().to_srgb8().opaque(),
+			});
+		}
 	}
 }

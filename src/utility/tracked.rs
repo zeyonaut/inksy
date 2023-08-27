@@ -14,6 +14,10 @@ pub struct Tracked<T> {
 }
 
 impl<T> Tracked<T> {
+	pub fn invalidate(&mut self) {
+		self.is_dirty = true;
+	}
+
 	pub fn take(self) -> T {
 		self.value
 	}
