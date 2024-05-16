@@ -35,7 +35,7 @@ pub fn set_fullscreen(hwnd: HWND) {
 		let mut window_placement = MaybeUninit::<WINDOWPLACEMENT>::uninit();
 		GetWindowPlacement(hwnd, window_placement.as_mut_ptr());
 		let mut window_placement = window_placement.assume_init();
-		window_placement.showCmd = SW_SHOWMAXIMIZED;
+		window_placement.showCmd = SW_SHOWMAXIMIZED as _;
 
 		SetWindowLongPtrW(hwnd, GWL_STYLE, window_style);
 		SetWindowPos(hwnd, 0, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER);
@@ -58,10 +58,17 @@ pub fn set_unfullscreen(hwnd: HWND, pre_fullscreen_state: PreFullscreenState) {
 		window_placement.showCmd = match pre_fullscreen_state {
 			PreFullscreenState::Maximized => SW_SHOWMAXIMIZED,
 			PreFullscreenState::Normal(..) => SW_SHOWNORMAL,
-		};
+		} as _;
 
 		SetWindowLongPtrW(hwnd, GWL_STYLE, window_style);
 		SetWindowPos(hwnd, 0, 0, 0, 0, 0, positioning_flag | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER);
 		SetWindowPlacement(hwnd, &window_placement);
 	}
+}
+
+#[cfg(target_os = "windows")]
+pub fn window_hwnd(window: &winit::window::Window) -> std::num::NonZero<isize> {
+	use raw_window_handle::HasWindowHandle;
+	let raw_window_handle::RawWindowHandle::Win32(rwh) = window.window_handle().unwrap().as_raw() else { unreachable!() };
+	rwh.hwnd
 }

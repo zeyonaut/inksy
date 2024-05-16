@@ -13,7 +13,7 @@ pub mod wintab;
 pub mod keymap;
 
 use enumset::{EnumSet, EnumSetType};
-use winit::event::{ElementState, KeyboardInput};
+use winit::event::{ElementState, KeyEvent};
 
 #[derive(EnumSetType)]
 pub enum Key {
@@ -90,71 +90,71 @@ impl InputMonitor {
 		}
 	}
 
-	pub fn process_keyboard_input(&mut self, keyboard_input: &KeyboardInput) {
-		if let Some(keycode) = keyboard_input.virtual_keycode {
-			use winit::event::VirtualKeyCode;
-			use Key::*;
-			let key = match keycode {
-				VirtualKeyCode::Key1 => K0,
-				VirtualKeyCode::Key2 => K1,
-				VirtualKeyCode::Key3 => K2,
-				VirtualKeyCode::Key4 => K3,
-				VirtualKeyCode::Key5 => K4,
-				VirtualKeyCode::Key6 => K5,
-				VirtualKeyCode::Key7 => K6,
-				VirtualKeyCode::Key8 => K7,
-				VirtualKeyCode::Key9 => K8,
-				VirtualKeyCode::Key0 => K9,
-				VirtualKeyCode::A => A,
-				VirtualKeyCode::B => B,
-				VirtualKeyCode::C => C,
-				VirtualKeyCode::D => D,
-				VirtualKeyCode::E => E,
-				VirtualKeyCode::F => F,
-				VirtualKeyCode::G => G,
-				VirtualKeyCode::H => H,
-				VirtualKeyCode::I => I,
-				VirtualKeyCode::J => J,
-				VirtualKeyCode::K => K,
-				VirtualKeyCode::L => L,
-				VirtualKeyCode::M => M,
-				VirtualKeyCode::N => N,
-				VirtualKeyCode::O => O,
-				VirtualKeyCode::P => P,
-				VirtualKeyCode::Q => Q,
-				VirtualKeyCode::R => R,
-				VirtualKeyCode::S => S,
-				VirtualKeyCode::T => T,
-				VirtualKeyCode::U => U,
-				VirtualKeyCode::V => V,
-				VirtualKeyCode::W => W,
-				VirtualKeyCode::X => X,
-				VirtualKeyCode::Y => Y,
-				VirtualKeyCode::Z => Z,
-				VirtualKeyCode::Back => Backspace,
-				VirtualKeyCode::Escape => Escape,
-				VirtualKeyCode::Space => Space,
-				VirtualKeyCode::Tab => Tab,
-				VirtualKeyCode::LShift => Shift,
-				VirtualKeyCode::RShift => Shift,
-				VirtualKeyCode::LControl => Control,
-				VirtualKeyCode::RControl => Control,
-				VirtualKeyCode::Left => LeftArrow,
-				VirtualKeyCode::Right => RightArrow,
-				_ => return,
-			};
-			let is_active = keyboard_input.state == ElementState::Pressed;
-			self.fresh_keys.insert(key);
-			if self.active_keys.contains(key) != is_active {
-				self.different_keys.insert(key);
-			}
-			if is_active {
-				self.active_keys.insert(key);
-			} else {
-				self.active_keys.remove(key);
-			}
-		}
+	pub fn process_key_event(&mut self, event: &KeyEvent) {
 		self.is_fresh = true;
+
+		let winit::keyboard::PhysicalKey::Code(keycode) = event.physical_key else { return };
+
+		use winit::keyboard::KeyCode;
+		use Key::*;
+		let key = match keycode {
+			KeyCode::Digit1 => K0,
+			KeyCode::Digit2 => K1,
+			KeyCode::Digit3 => K2,
+			KeyCode::Digit4 => K3,
+			KeyCode::Digit5 => K4,
+			KeyCode::Digit6 => K5,
+			KeyCode::Digit7 => K6,
+			KeyCode::Digit8 => K7,
+			KeyCode::Digit9 => K8,
+			KeyCode::Digit0 => K9,
+			KeyCode::KeyA => A,
+			KeyCode::KeyB => B,
+			KeyCode::KeyC => C,
+			KeyCode::KeyD => D,
+			KeyCode::KeyE => E,
+			KeyCode::KeyF => F,
+			KeyCode::KeyG => G,
+			KeyCode::KeyH => H,
+			KeyCode::KeyI => I,
+			KeyCode::KeyJ => J,
+			KeyCode::KeyK => K,
+			KeyCode::KeyL => L,
+			KeyCode::KeyM => M,
+			KeyCode::KeyN => N,
+			KeyCode::KeyO => O,
+			KeyCode::KeyP => P,
+			KeyCode::KeyQ => Q,
+			KeyCode::KeyR => R,
+			KeyCode::KeyS => S,
+			KeyCode::KeyT => T,
+			KeyCode::KeyU => U,
+			KeyCode::KeyV => V,
+			KeyCode::KeyW => W,
+			KeyCode::KeyX => X,
+			KeyCode::KeyY => Y,
+			KeyCode::KeyZ => Z,
+			KeyCode::Backspace => Backspace,
+			KeyCode::Escape => Escape,
+			KeyCode::Space => Space,
+			KeyCode::Tab => Tab,
+			KeyCode::ShiftLeft | KeyCode::ShiftRight => Shift,
+			KeyCode::ControlLeft | KeyCode::ControlRight => Control,
+			KeyCode::ArrowLeft => LeftArrow,
+			KeyCode::ArrowRight => RightArrow,
+			_ => return,
+		};
+
+		let is_active = event.state == ElementState::Pressed;
+		self.fresh_keys.insert(key);
+		if self.active_keys.contains(key) != is_active {
+			self.different_keys.insert(key);
+		}
+		if is_active {
+			self.active_keys.insert(key);
+		} else {
+			self.active_keys.remove(key);
+		}
 	}
 
 	pub fn process_mouse_input(&mut self, element_state: &ElementState) {

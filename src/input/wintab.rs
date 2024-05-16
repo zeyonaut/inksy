@@ -5,15 +5,12 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-#![cfg(target_os = "windows")]
-
 use std::{
 	ffi::{c_char, c_int, c_long, c_uint, c_ulong, c_void},
 	mem::size_of,
 };
 
 use bitflags::bitflags;
-use winit::platform::windows::WindowExtWindows;
 
 /*
 char : c_char
@@ -164,7 +161,7 @@ impl TabletContext {
 		let wintab_library = unsafe { libloading::Library::new("wintab32.dll").ok()? };
 		let wintab = WintabInterface::new(&wintab_library)?;
 
-		let handle = unsafe { (wintab.WTOpenA)(window.hwnd(), &logical_context, false as c_uint) };
+		let handle = unsafe { (wintab.WTOpenA)(crate::windows::window_hwnd(window).into(), &logical_context, false as c_uint) };
 		if handle.is_null() {
 			None
 		} else {

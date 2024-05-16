@@ -31,7 +31,7 @@ fn create_bind_group(device: &wgpu::Device, bind_group_layout: &wgpu::BindGroupL
 	let texture_view = texture.create_view(&wgpu::TextureViewDescriptor::default());
 	let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
 		label: None,
-		layout: &bind_group_layout,
+		layout: bind_group_layout,
 		entries: &[
 			wgpu::BindGroupEntry {
 				binding: 0,
@@ -39,7 +39,7 @@ fn create_bind_group(device: &wgpu::Device, bind_group_layout: &wgpu::BindGroupL
 			},
 			wgpu::BindGroupEntry {
 				binding: 1,
-				resource: wgpu::BindingResource::Sampler(&sampler),
+				resource: wgpu::BindingResource::Sampler(sampler),
 			},
 		],
 	});
@@ -81,7 +81,7 @@ impl Texture {
 			mipmap_filter: wgpu::FilterMode::Linear,
 			..Default::default()
 		});
-		let (texture, texture_size, bind_group) = create_bind_group(device, &bind_group_layout, &sampler, dimensions);
+		let (texture, texture_size, bind_group) = create_bind_group(device, bind_group_layout, &sampler, dimensions);
 		Self {
 			rgba: Some(image),
 			texture,

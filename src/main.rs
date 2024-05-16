@@ -40,10 +40,24 @@ fn main() {
 	env_logger::init();
 
 	// Initialize the event loop.
-	let event_loop = EventLoopBuilder::new().build();
+	let event_loop = EventLoopBuilder::new().build().unwrap();
+
+	// Create a window.
+	let window = winit::window::WindowBuilder::new().with_title(crate::APP_NAME_CAPITALIZED).with_visible(false).build(&event_loop).unwrap();
+
+	// Set the icon (on Windows).
+	#[cfg(target_os = "windows")]
+	{
+		crate::windows::set_window_icon(crate::windows::window_hwnd(&window).into());
+	}
+
+	// Resize the window to a reasonable size.
+	let monitor_size = window.current_monitor().unwrap().size();
+	let _ = window.request_inner_size(winit::dpi::PhysicalSize::new(monitor_size.width as f64 / 1.5, monitor_size.height as f64 / 1.5));
+	window.set_outer_position(winit::dpi::PhysicalPosition::new(monitor_size.width as f64 / 6., monitor_size.height as f64 / 6.));
 
 	// Initialize the app at the event loop.
-	let app = App::new(&event_loop);
+	let app = App::new(&window);
 
 	// Run the app with its event loop.
 	app.run(event_loop);

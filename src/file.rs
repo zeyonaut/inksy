@@ -223,20 +223,20 @@ pub fn load_canvas_from_file(renderer: &mut Renderer, file_path: PathBuf) -> Opt
 
 fn read_u64s<const N: usize>(file: &mut impl Read) -> Option<[u64; N]> {
 	let mut array = [0; N];
-	for i in 0..N {
+	for element in &mut array {
 		let mut buffer = [0; 8];
 		file.read_exact(&mut buffer).ok()?;
-		array[i] = u64::from_le_bytes(buffer);
+		*element = u64::from_le_bytes(buffer);
 	}
 	Some(array)
 }
 
 fn read_u32s<const N: usize>(file: &mut impl Read) -> Option<[u32; N]> {
 	let mut array = [0; N];
-	for i in 0..N {
+	for element in &mut array {
 		let mut buffer = [0; 4];
 		file.read_exact(&mut buffer).ok()?;
-		array[i] = u32::from_le_bytes(buffer);
+		*element = u32::from_le_bytes(buffer);
 	}
 	Some(array)
 }
@@ -249,10 +249,10 @@ fn read_u8s<const N: usize>(file: &mut impl Read) -> Option<[u8; N]> {
 
 fn read_f32s<const N: usize>(file: &mut impl Read) -> Option<[f32; N]> {
 	let mut array = [0.; N];
-	for i in 0..N {
+	for element in &mut array {
 		let mut buffer = [0; 4];
 		file.read_exact(&mut buffer).ok()?;
-		array[i] = f32::from_le_bytes(buffer);
+		*element = f32::from_le_bytes(buffer);
 	}
 	Some(array)
 }

@@ -37,11 +37,13 @@ impl<Vertex> VertexRenderer<Vertex> {
 			vertex: wgpu::VertexState {
 				module: &shader_module,
 				entry_point: vertex_main,
+				compilation_options: Default::default(),
 				buffers: &[Vertex::buffer_layout(wgpu::VertexStepMode::Vertex)],
 			},
 			fragment: Some(wgpu::FragmentState {
 				module: &shader_module,
 				entry_point: fragment_main,
+				compilation_options: Default::default(),
 				targets: &[Some(wgpu::ColorTargetState {
 					format: texture_format,
 					blend: Some(wgpu::BlendState::ALPHA_BLENDING),
@@ -66,8 +68,8 @@ impl<Vertex> VertexRenderer<Vertex> {
 			multiview: None,
 		});
 
-		let vertex_buffer = DynamicBuffer::<Vertex>::new(&device, wgpu::BufferUsages::VERTEX, 1 << 16);
-		let index_buffer = DynamicBuffer::<u32>::new(&device, wgpu::BufferUsages::INDEX, 1 << 16);
+		let vertex_buffer = DynamicBuffer::<Vertex>::new(device, wgpu::BufferUsages::VERTEX, 1 << 16);
+		let index_buffer = DynamicBuffer::<u32>::new(device, wgpu::BufferUsages::INDEX, 1 << 16);
 
 		Self { render_pipeline, vertex_buffer, index_buffer }
 	}

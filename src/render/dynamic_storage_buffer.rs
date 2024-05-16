@@ -19,7 +19,7 @@ pub struct DynamicStorageBuffer<T> {
 
 impl<T> DynamicStorageBuffer<T> {
 	pub fn new(device: &wgpu::Device, mut capacity: u64) -> Self {
-		while (std::mem::size_of::<T>() as u64 * capacity & wgpu::COPY_BUFFER_ALIGNMENT as u64 - 1) != 0 {
+		while ((std::mem::size_of::<T>() as u64 * capacity) & (wgpu::COPY_BUFFER_ALIGNMENT - 1)) != 0 {
 			capacity = (capacity + 1).next_power_of_two();
 		}
 		let size = std::mem::size_of::<T>() as u64 * capacity;
@@ -87,6 +87,6 @@ impl<T> DynamicStorageBuffer<T> {
 			self.buffer = buffer;
 		}
 
-		queue.write_buffer(&self.buffer, (std::mem::size_of::<T>() * offset) as wgpu::BufferAddress, bytemuck::cast_slice(&source));
+		queue.write_buffer(&self.buffer, (std::mem::size_of::<T>() * offset) as wgpu::BufferAddress, bytemuck::cast_slice(source));
 	}
 }

@@ -57,17 +57,17 @@ pub struct CanvasRenderer {
 }
 
 impl CanvasRenderer {
-	pub fn new<'a>(device: &wgpu::Device, texture_format: wgpu::TextureFormat, viewport_buffer: &UniformBuffer<ViewportUniform>, sample_count: u32) -> Self {
+	pub fn new(device: &wgpu::Device, texture_format: wgpu::TextureFormat, viewport_buffer: &UniformBuffer<ViewportUniform>, sample_count: u32) -> Self {
 		let selection_transformation_uniform_buffer = UniformBuffer::new(device, 0, Default::default());
 
 		Self {
 			image_instance_renderer: InstanceRenderer::new(
-				&device,
+				device,
 				texture_format,
 				include_str!("shaders/canvas_image.wgsl"),
 				"vs_main",
 				"fs_main",
-				&[&viewport_buffer.bind_group_layout, &selection_transformation_uniform_buffer.bind_group_layout, &Texture::bind_group_layout(&device)],
+				&[&viewport_buffer.bind_group_layout, &selection_transformation_uniform_buffer.bind_group_layout, &Texture::bind_group_layout(device)],
 				sample_count,
 			),
 			stroke_renderer: StrokeRenderer::new(
@@ -76,7 +76,7 @@ impl CanvasRenderer {
 				include_str!("shaders/stroke_trigon.wgsl"),
 				"vs_main",
 				"fs_main",
-				&viewport_buffer,
+				viewport_buffer,
 				&selection_transformation_uniform_buffer,
 				sample_count,
 			),
@@ -209,9 +209,9 @@ impl StrokeRenderer {
 		selection_transformation_uniform_buffer: &UniformBuffer<SelectionTransformation>,
 		sample_count: u32,
 	) -> Self {
-		let vertex_buffer = DynamicBuffer::<StrokeVertex>::new(&device, wgpu::BufferUsages::VERTEX, 1 << 16);
-		let index_buffer = DynamicBuffer::<u32>::new(&device, wgpu::BufferUsages::INDEX, 1 << 16);
-		let extension_storage_buffer = DynamicStorageBuffer::<StrokeExtension>::new(&device, 1 << 16);
+		let vertex_buffer = DynamicBuffer::<StrokeVertex>::new(device, wgpu::BufferUsages::VERTEX, 1 << 16);
+		let index_buffer = DynamicBuffer::<u32>::new(device, wgpu::BufferUsages::INDEX, 1 << 16);
+		let extension_storage_buffer = DynamicStorageBuffer::<StrokeExtension>::new(device, 1 << 16);
 
 		let shader_module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
 			label: None,
@@ -230,11 +230,13 @@ impl StrokeRenderer {
 			vertex: wgpu::VertexState {
 				module: &shader_module,
 				entry_point: vertex_main,
+				compilation_options: Default::default(),
 				buffers: &[StrokeVertex::buffer_layout(wgpu::VertexStepMode::Vertex)],
 			},
 			fragment: Some(wgpu::FragmentState {
 				module: &shader_module,
 				entry_point: fragment_main,
+				compilation_options: Default::default(),
 				targets: &[Some(wgpu::ColorTargetState {
 					format: texture_format,
 					blend: Some(wgpu::BlendState::ALPHA_BLENDING),

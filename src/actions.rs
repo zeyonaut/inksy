@@ -115,10 +115,8 @@ fn close_tab(app: &mut App) {
 		app.canvases.remove(current_canvas_index);
 		if current_canvas_index > 0 {
 			app.current_canvas_index = Some(current_canvas_index - 1);
-		} else {
-			if app.canvases.is_empty() {
-				app.current_canvas_index = None;
-			}
+		} else if app.canvases.is_empty() {
+			app.current_canvas_index = None;
 		}
 	}
 	app.update_window_title();
@@ -225,21 +223,20 @@ fn toggle_fullscreen(app: &mut App) {
 	// On Windows, we enable fullscreen this way to allow the window to gracefully handle defocusing.
 	#[cfg(target_os = "windows")]
 	{
-		use winit::platform::windows::WindowExtWindows;
 		if let Some(pre_fullscreen_state) = app.pre_fullscreen_state {
 			app.pre_fullscreen_state = None;
-			crate::windows::set_unfullscreen(app.window.hwnd(), pre_fullscreen_state);
+			crate::windows::set_unfullscreen(crate::windows::window_hwnd(app.window).into(), pre_fullscreen_state);
 			if let PreFullscreenState::Normal(outer_position, inner_size) = pre_fullscreen_state {
 				app.window.set_outer_position(outer_position);
-				app.window.set_inner_size(inner_size);
+				let _ = app.window.request_inner_size(inner_size);
 			}
 		} else {
 			app.pre_fullscreen_state = Some(if app.window.is_maximized() {
 				PreFullscreenState::Maximized
 			} else {
-				PreFullscreenState::Normal(app.window.outer_position().unwrap_or(Default::default()), app.window.inner_size())
+				PreFullscreenState::Normal(app.window.outer_position().unwrap_or_default(), app.window.inner_size())
 			});
-			crate::windows::set_fullscreen(app.window.hwnd());
+			crate::windows::set_fullscreen(crate::windows::window_hwnd(app.window).into());
 		}
 	}
 
@@ -255,20 +252,16 @@ fn toggle_maximized(app: &mut App) {
 fn undo(app: &mut App) {
 	if app.mode_stack.is_drafting() {
 		app.mode_stack.discard_draft();
-	} else {
-		if let Some(canvas) = app.current_canvas_index.and_then(|x| app.canvases.get_mut(x)) {
-			canvas.undo();
-		}
+	} else if let Some(canvas) = app.current_canvas_index.and_then(|x| app.canvases.get_mut(x)) {
+		canvas.undo();
 	}
 }
 
 fn redo(app: &mut App) {
 	if app.mode_stack.is_drafting() {
 		app.mode_stack.discard_draft();
-	} else {
-		if let Some(canvas) = app.current_canvas_index.and_then(|x| app.canvases.get_mut(x)) {
-			canvas.redo();
-		}
+	} else if let Some(canvas) = app.current_canvas_index.and_then(|x| app.canvases.get_mut(x)) {
+		canvas.redo();
 	}
 }
 

@@ -40,11 +40,13 @@ impl<Instance> InstanceRenderer<Instance> {
 			vertex: wgpu::VertexState {
 				module: &shader_module,
 				entry_point: vertex_main,
+				compilation_options: Default::default(),
 				buffers: &[Instance::buffer_layout(wgpu::VertexStepMode::Instance)],
 			},
 			fragment: Some(wgpu::FragmentState {
 				module: &shader_module,
 				entry_point: fragment_main,
+				compilation_options: Default::default(),
 				targets: &[Some(wgpu::ColorTargetState {
 					format: texture_format,
 					blend: Some(wgpu::BlendState::ALPHA_BLENDING),
@@ -69,7 +71,7 @@ impl<Instance> InstanceRenderer<Instance> {
 			multiview: None,
 		});
 
-		let instance_buffer = DynamicBuffer::<Instance>::new(&device, wgpu::BufferUsages::VERTEX, 1 << 0);
+		let instance_buffer = DynamicBuffer::<Instance>::new(device, wgpu::BufferUsages::VERTEX, 1 << 0);
 
 		const RECT_INDICES: &[u16] = &[0, 1, 2, 0, 2, 3];
 

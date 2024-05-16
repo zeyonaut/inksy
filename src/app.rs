@@ -10,8 +10,7 @@ use std::time::{Duration, Instant};
 use winit::{
 	dpi::{PhysicalPosition, PhysicalSize},
 	event::*,
-	event_loop::{ControlFlow, EventLoop},
-	window::WindowBuilder,
+	event_loop::{EventLoop, EventLoopWindowTarget},
 };
 
 #[cfg(target_os = "linux")]
@@ -52,13 +51,12 @@ pub enum PreFullscreenState {
 }
 
 // Current state of our app.
-pub struct App {
+pub struct App<'window> {
 	pub config: Config,
-	pub window: winit::window::Window,
 	pub clipboard: Clipboard,
 	pub pending_resize: Option<winit::dpi::PhysicalSize<u32>>,
 	pub should_redraw: bool,
-	pub renderer: Renderer,
+	pub renderer: Renderer<'window>,
 	pub cursor_physical_position: Vex<2, Px>,
 	pub scale: Scale,
 	pub is_cursor_relevant: bool,
@@ -73,36 +71,22 @@ pub struct App {
 	pub keymap: Keymap,
 	pub clipboard_contents: Option<ClipboardContents>,
 	pub pre_fullscreen_state: Option<PreFullscreenState>,
+	pub window: &'window winit::window::Window,
 }
 
-impl App {
+impl<'window> App<'window> {
 	// Sets up the logger and renderer.
-	pub fn new(event_loop: &EventLoop<()>) -> Self {
+	pub fn new(window: &'window winit::window::Window) -> Self {
 		let config = Config::load().unwrap_or_default();
 		let keymap = default_keymap();
 
-		// Create a window.
-		let window = WindowBuilder::new().with_title(crate::APP_NAME_CAPITALIZED).with_visible(false).build(event_loop).unwrap();
-
-		// Set the icon (on Windows).
-		#[cfg(target_os = "windows")]
-		{
-			use winit::platform::windows::WindowExtWindows;
-			crate::windows::set_window_icon(window.hwnd());
-		}
-
-		// Resize the window to a reasonable size.
-		let monitor_size = window.current_monitor().unwrap().size();
-		window.set_inner_size(PhysicalSize::new(monitor_size.width as f64 / 1.5, monitor_size.height as f64 / 1.5));
-		window.set_outer_position(PhysicalPosition::new(monitor_size.width as f64 / 6., monitor_size.height as f64 / 6.));
-
 		// Attempt to establish a tablet context.
-		let tablet_context = TabletContext::new(&window);
+		let tablet_context = TabletContext::new(window);
 
 		// Set up the renderer.
 		let size = window.inner_size();
 		let scale_factor = window.scale_factor() as f32;
-		let renderer = Renderer::new(&window, size.width, size.height, scale_factor);
+		let renderer = Renderer::new(window, size.width, size.height, scale_factor);
 
 		// Make the window visible and immediately clear color to prevent a flash.
 		let clear_color = config.default_canvas_color.opaque().to_lrgba().0.map(f64::from);
@@ -120,7 +104,6 @@ impl App {
 
 		// Return a new instance of the app state.
 		Self {
-			window,
 			clipboard: Clipboard::new().unwrap(),
 			pending_resize: None,
 			should_redraw: false,
@@ -140,6 +123,7 @@ impl App {
 			clipboard_contents: None,
 			pre_fullscreen_state: None,
 			config,
+			window,
 		}
 	}
 
@@ -149,11 +133,11 @@ impl App {
 		self.update_window_title();
 
 		// Run the event loop.
-		event_loop.run(move |event, _, control_flow| self.handle_event(event, control_flow));
+		event_loop.run(move |event, window_target| self.handle_event(event, window_target)).unwrap();
 	}
 
 	// Handles a single event.
-	fn handle_event(&mut self, event: Event<()>, control_flow: &mut ControlFlow) {
+	fn handle_event(&mut self, event: Event<()>, window_target: &EventLoopWindowTarget<()>) {
 		match event {
 			// Emitted when the event loop resumes.
 			Event::NewEvents(_) => {},
@@ -161,9 +145,9 @@ impl App {
 			Event::WindowEvent { ref event, window_id } if window_id == self.window.id() => {
 				match event {
 					// If the titlebar close button is clicked  or the escape key is pressed, exit the loop.
-					WindowEvent::CloseRequested => *control_flow = ControlFlow::Exit,
-					WindowEvent::KeyboardInput { input, .. } => {
-						self.input_monitor.process_keyboard_input(input);
+					WindowEvent::CloseRequested => window_target.exit(),
+					WindowEvent::KeyboardInput { event, .. } => {
+						self.input_monitor.process_key_event(event);
 					},
 					WindowEvent::MouseInput { state, button: MouseButton::Left, .. } => {
 						self.input_monitor.process_mouse_input(state);
@@ -186,56 +170,55 @@ impl App {
 					},
 					WindowEvent::CursorEntered { .. } => {
 						self.is_cursor_relevant = true;
-						self.tablet_context.as_mut().map(|c: &mut TabletContext| c.enable(true).unwrap());
+						if let Some(c) = &mut self.tablet_context {
+							c.enable(true).unwrap();
+						}
 					},
 					WindowEvent::CursorLeft { .. } => {
 						self.is_cursor_relevant = false;
-						self.tablet_context.as_mut().map(|c| c.enable(false).unwrap());
+						if let Some(c) = &mut self.tablet_context {
+							c.enable(false).unwrap();
+						}
 					},
 
 					// Resize the window if requested to.
 					WindowEvent::Resized(physical_size) => {
-						self.pending_resize = Some(physical_size.clone());
+						self.pending_resize = Some(*physical_size);
 						self.should_redraw = true;
 					},
-					WindowEvent::ScaleFactorChanged { scale_factor, new_inner_size } => {
+					WindowEvent::ScaleFactorChanged { scale_factor, inner_size_writer: _ } => {
 						self.scale = Scale(*scale_factor as f32);
-						self.pending_resize = Some(**new_inner_size);
 						self.should_redraw = true;
 					},
+
+					// If a window redraw is requested, have the renderer update and render.
+					WindowEvent::RedrawRequested => {
+						self.update_renderer();
+						if self.should_redraw || (Instant::now() - self.last_frame_instant) >= Duration::new(1, 0) / 90 {
+							self.last_frame_instant = Instant::now();
+							match self.repaint() {
+								Ok(_) => {},
+								Err(wgpu::SurfaceError::Lost) => self.renderer.resize(self.renderer.config.width, self.renderer.config.height, self.renderer.scale_factor),
+								Err(wgpu::SurfaceError::OutOfMemory) => window_target.exit(),
+								Err(e) => eprintln!("{:?}", e),
+							}
+							self.should_redraw = false;
+						}
+					},
+
 					// Ignore all other window events.
 					_ => {},
 				}
 			},
 
-			Event::MainEventsCleared => {
+			Event::AboutToWait => {
 				self.poll_tablet();
 				self.process_input();
 				self.window.request_redraw();
 			},
 
-			// If a window redraw is requested, have the renderer update and render.
-			Event::RedrawRequested(window_id) if window_id == self.window.id() => {
-				self.update_renderer();
-				if self.should_redraw || (Instant::now() - self.last_frame_instant) >= Duration::new(1, 0) / 90 {
-					self.last_frame_instant = Instant::now();
-					match self.repaint() {
-						Ok(_) => {},
-						Err(wgpu::SurfaceError::Lost) => self.renderer.resize(self.renderer.config.width, self.renderer.config.height, self.renderer.scale_factor),
-						Err(wgpu::SurfaceError::OutOfMemory) => *control_flow = ControlFlow::Exit,
-						Err(e) => eprintln!("{:?}", e),
-					}
-					self.should_redraw = false;
-				}
-			},
-
-			// If all redraw events have been cleared, suspend until a new event arrives.
-			Event::RedrawEventsCleared => {
-				*control_flow = ControlFlow::Wait;
-			},
-
 			// Ignore all other events.
-			_ => return,
+			_ => (),
 		}
 	}
 
@@ -430,10 +413,8 @@ impl App {
 							let offset = canvas.view.position + cursor_virtual_position - current_stroke.position;
 							current_stroke.add_point(offset, self.pressure.map_or(1., |pressure| (pressure / 32767.) as f32))
 						}
-					} else {
-						if let Some(stroke) = current_stroke.take() {
-							canvas.perform_operation(Operation::CommitStrokes { strokes: vec![stroke.finalize().into()] });
-						}
+					} else if let Some(stroke) = current_stroke.take() {
+						canvas.perform_operation(Operation::CommitStrokes { strokes: vec![stroke.finalize().into()] });
 					}
 				},
 				Tool::Select { origin } => {
@@ -446,14 +427,12 @@ impl App {
 						if self.input_monitor.different_buttons.contains(Left) && origin.is_none() {
 							*origin = Some(offset);
 						}
-					} else {
-						if let Some(origin) = origin.take() {
-							let offset = cursor_virtual_position.rotate(-canvas.view.tilt);
-							let origin = (origin - canvas.view.position).rotate(-canvas.view.tilt);
-							let min = Vex([offset[0].min(origin[0]), offset[1].min(origin[1])]);
-							let max = Vex([offset[0].max(origin[0]), offset[1].max(origin[1])]);
-							canvas.select(min, max, canvas.view.tilt, canvas.view.position, self.input_monitor.active_keys.contains(Shift));
-						}
+					} else if let Some(origin) = origin.take() {
+						let offset = cursor_virtual_position.rotate(-canvas.view.tilt);
+						let origin = (origin - canvas.view.position).rotate(-canvas.view.tilt);
+						let min = Vex([offset[0].min(origin[0]), offset[1].min(origin[1])]);
+						let max = Vex([offset[0].max(origin[0]), offset[1].max(origin[1])]);
+						canvas.select(min, max, canvas.view.tilt, canvas.view.position, self.input_monitor.active_keys.contains(Shift));
 					}
 				},
 				Tool::Pan { origin } => {
@@ -544,24 +523,22 @@ impl App {
 						if self.input_monitor.different_buttons.contains(Left) && origin.is_none() {
 							*origin = Some(canvas.view.position + cursor_virtual_position);
 						}
-					} else {
-						if let Some(origin) = origin.take() {
-							let selection_offset = canvas.view.position + cursor_virtual_position - origin;
+					} else if let Some(origin) = origin.take() {
+						let selection_offset = canvas.view.position + cursor_virtual_position - origin;
 
-							let selected_image_indices = canvas.images().iter().enumerate().filter_map(|(index, image)| if image.is_selected { Some(index) } else { None }).collect::<Vec<_>>();
+						let selected_image_indices = canvas.images().iter().enumerate().filter_map(|(index, image)| if image.is_selected { Some(index) } else { None }).collect::<Vec<_>>();
 
-							let selected_stroke_indices = canvas.strokes().iter().enumerate().filter_map(|(index, stroke)| if stroke.is_selected { Some(index) } else { None }).collect::<Vec<_>>();
+						let selected_stroke_indices = canvas.strokes().iter().enumerate().filter_map(|(index, stroke)| if stroke.is_selected { Some(index) } else { None }).collect::<Vec<_>>();
 
-							if !selected_image_indices.is_empty() || !selected_stroke_indices.is_empty() {
-								canvas.perform_operation(Operation::TranslateObjects {
-									image_indices: selected_image_indices,
-									stroke_indices: selected_stroke_indices,
-									vector: selection_offset,
-								});
-							}
-
-							canvas.selection_transformation = Default::default();
+						if !selected_image_indices.is_empty() || !selected_stroke_indices.is_empty() {
+							canvas.perform_operation(Operation::TranslateObjects {
+								image_indices: selected_image_indices,
+								stroke_indices: selected_stroke_indices,
+								vector: selection_offset,
+							});
 						}
+
+						canvas.selection_transformation = Default::default();
 					}
 				},
 				Tool::Rotate { origin } => {
@@ -585,26 +562,24 @@ impl App {
 								}
 							});
 						}
-					} else {
-						if let Some(RotateDraft { center, initial_position }) = origin.take() {
-							let selection_offset = canvas.view.position + cursor_virtual_position - center;
-							let angle = initial_position.angle_to(selection_offset);
+					} else if let Some(RotateDraft { center, initial_position }) = origin.take() {
+						let selection_offset = canvas.view.position + cursor_virtual_position - center;
+						let angle = initial_position.angle_to(selection_offset);
 
-							let selected_image_indices = canvas.images().iter().enumerate().filter_map(|(index, image)| if image.is_selected { Some(index) } else { None }).collect::<Vec<_>>();
+						let selected_image_indices = canvas.images().iter().enumerate().filter_map(|(index, image)| if image.is_selected { Some(index) } else { None }).collect::<Vec<_>>();
 
-							let selected_stroke_indices = canvas.strokes().iter().enumerate().filter_map(|(index, stroke)| if stroke.is_selected { Some(index) } else { None }).collect::<Vec<_>>();
+						let selected_stroke_indices = canvas.strokes().iter().enumerate().filter_map(|(index, stroke)| if stroke.is_selected { Some(index) } else { None }).collect::<Vec<_>>();
 
-							if !selected_image_indices.is_empty() || !selected_stroke_indices.is_empty() {
-								canvas.perform_operation(Operation::RotateObjects {
-									image_indices: selected_image_indices,
-									stroke_indices: selected_stroke_indices,
-									center,
-									angle,
-								});
-							}
-
-							canvas.selection_transformation = Default::default();
+						if !selected_image_indices.is_empty() || !selected_stroke_indices.is_empty() {
+							canvas.perform_operation(Operation::RotateObjects {
+								image_indices: selected_image_indices,
+								stroke_indices: selected_stroke_indices,
+								center,
+								angle,
+							});
 						}
+
+						canvas.selection_transformation = Default::default();
 					}
 				},
 				Tool::Resize { origin } => {
@@ -628,26 +603,24 @@ impl App {
 								}
 							});
 						}
-					} else {
-						if let Some(ResizeDraft { center, initial_distance }) = origin.take() {
-							let selection_distance = (canvas.view.position + cursor_virtual_position - center).norm();
-							let dilation = selection_distance / initial_distance;
+					} else if let Some(ResizeDraft { center, initial_distance }) = origin.take() {
+						let selection_distance = (canvas.view.position + cursor_virtual_position - center).norm();
+						let dilation = selection_distance / initial_distance;
 
-							let selected_image_indices = canvas.images().iter().enumerate().filter_map(|(index, image)| if image.is_selected { Some(index) } else { None }).collect::<Vec<_>>();
+						let selected_image_indices = canvas.images().iter().enumerate().filter_map(|(index, image)| if image.is_selected { Some(index) } else { None }).collect::<Vec<_>>();
 
-							let selected_stroke_indices = canvas.strokes().iter().enumerate().filter_map(|(index, stroke)| if stroke.is_selected { Some(index) } else { None }).collect::<Vec<_>>();
+						let selected_stroke_indices = canvas.strokes().iter().enumerate().filter_map(|(index, stroke)| if stroke.is_selected { Some(index) } else { None }).collect::<Vec<_>>();
 
-							if !selected_image_indices.is_empty() || !selected_stroke_indices.is_empty() {
-								canvas.perform_operation(Operation::ResizeObjects {
-									image_indices: selected_image_indices,
-									stroke_indices: selected_stroke_indices,
-									center,
-									dilation,
-								});
-							}
-
-							canvas.selection_transformation = Default::default();
+						if !selected_image_indices.is_empty() || !selected_stroke_indices.is_empty() {
+							canvas.perform_operation(Operation::ResizeObjects {
+								image_indices: selected_image_indices,
+								stroke_indices: selected_stroke_indices,
+								center,
+								dilation,
+							});
 						}
+
+						canvas.selection_transformation = Default::default();
 					}
 				},
 				Tool::PickColor { cursor_physical_origin, part } => {
@@ -676,7 +649,7 @@ impl App {
 								let other = Vex([-(3.0f32.sqrt()) / 2., -1. / 2.]);
 								let dot = other.dot(scaled_vector);
 								let scaled_vector = scaled_vector + -other * (dot - dot.min(0.5));
-								let scaled_vector = Vex([scaled_vector[0].max(-3.0f32.sqrt() / 2.), scaled_vector[1].min(0.5)]);
+								let scaled_vector = Vex([scaled_vector[0].max(-(3.0f32.sqrt()) / 2.), scaled_vector[1].min(0.5)]);
 								let s = (1. - 2. * scaled_vector[1]) / (2. + 3.0f32.sqrt() * scaled_vector[0] - scaled_vector[1]);
 								canvas.stroke_color[1] = if s.is_nan() { 0. } else { s.clamp(0., 1.) };
 								canvas.stroke_color[2] = ((2. + 3.0f32.sqrt() * scaled_vector[0] - scaled_vector[1]) / 3.).clamp(0., 1.);

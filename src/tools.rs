@@ -81,10 +81,8 @@ impl ModeStack {
 					if !matches!(self.get(), &Tool::Pan { .. }) {
 						self.transient_mode = Some(Tool::Pan { origin: None });
 					}
-				} else {
-					if matches!(self.get(), &Tool::Pan { .. }) {
-						self.transient_mode = None;
-					}
+				} else if matches!(self.get(), &Tool::Pan { .. }) {
+					self.transient_mode = None;
 				}
 			},
 			TransientModeSwitch::Zoom { should_zoom } => {
@@ -92,10 +90,8 @@ impl ModeStack {
 					if !matches!(self.get(), &Tool::Zoom { .. }) {
 						self.transient_mode = Some(Tool::Zoom { origin: None });
 					}
-				} else {
-					if matches!(self.get(), &Tool::Zoom { .. }) {
-						self.transient_mode = None;
-					}
+				} else if matches!(self.get(), &Tool::Zoom { .. }) {
+					self.transient_mode = None;
 				}
 			},
 			TransientModeSwitch::Orbit { should_orbit } => {
@@ -103,10 +99,8 @@ impl ModeStack {
 					if !matches!(self.get(), &Tool::Orbit { .. }) {
 						self.transient_mode = Some(Tool::Orbit { initial: None });
 					}
-				} else {
-					if matches!(self.get(), &Tool::Orbit { .. }) {
-						self.transient_mode = None;
-					}
+				} else if matches!(self.get(), &Tool::Orbit { .. }) {
+					self.transient_mode = None;
 				}
 			},
 			TransientModeSwitch::Color { center } => {
@@ -114,10 +108,8 @@ impl ModeStack {
 					if !matches!(self.get(), &Tool::PickColor { .. }) {
 						self.transient_mode = Some(Tool::PickColor { cursor_physical_origin: center, part: None });
 					}
-				} else {
-					if matches!(self.get(), &Tool::PickColor { .. }) {
-						self.transient_mode = None;
-					}
+				} else if matches!(self.get(), &Tool::PickColor { .. }) {
+					self.transient_mode = None;
 				}
 			},
 		}

@@ -561,71 +561,43 @@ impl Canvas {
 
 	pub fn select(&mut self, min: Vex<2, Vx>, max: Vex<2, Vx>, tilt: f32, screen_center: Vex<2, Vx>, should_aggregate: bool) {
 		let selection_corners = [min, Vex([max[0], min[1]]), max, Vex([min[0], max[1]])].map(|v| v.rotate(tilt) + screen_center);
-		let selection_center = (selection_corners[2] + selection_corners[0]) / 2.;
-		let selection_semidimensions = (selection_corners[2] - selection_corners[0]) / 2.;
-		let alpha_hat = (selection_corners[1] - selection_corners[0]).normalized();
-		let beta_hat = (selection_corners[3] - selection_corners[0]).normalized();
+		let selection_center = ((max + min) / 2.).rotate(tilt) + screen_center;
+		let selection_semidimensions = (max - min) / 2.;
+		let alpha = selection_corners[1] - selection_corners[0];
+		let beta = selection_corners[3] - selection_corners[0];
+		let alpha_hat = alpha.normalized();
+		let beta_hat = beta.normalized();
 		for image in self.images.iter_mut() {
 			let image_corners = [-image.dimensions, image.dimensions.flip::<1>(), image.dimensions, image.dimensions.flip::<0>()].map(|v| ((v * 0.5).rotate(image.orientation) * image.dilation) + image.position);
 			let image_semidimensions = image.dimensions * 0.5 * image.dilation;
 			let gamma_hat = (image_corners[1] - image_corners[0]).normalized();
 			let delta_hat = (image_corners[3] - image_corners[0]).normalized();
-			// I'm so sorry for this, I promise I'll clean it up later :(
-			let no_overlap = {
-				let projected_image_corners = image_corners.map(|corner| (corner - selection_center).dot(alpha_hat));
-				projected_image_corners[1] * projected_image_corners[0] >= Vx2(0.)
-					&& projected_image_corners[2] * projected_image_corners[1] >= Vx2(0.)
-					&& projected_image_corners[3] * projected_image_corners[2] >= Vx2(0.)
-					&& projected_image_corners.iter().fold(true, |acc, corner| acc && corner.abs() > selection_semidimensions[0])
-			} || {
-				let projected_image_corners = image_corners.map(|corner| (corner - selection_center).dot(beta_hat));
-				projected_image_corners[1] * projected_image_corners[0] >= Vx2(0.)
-					&& projected_image_corners[2] * projected_image_corners[1] >= Vx2(0.)
-					&& projected_image_corners[3] * projected_image_corners[2] >= Vx2(0.)
-					&& projected_image_corners.iter().fold(true, |acc, corner| acc && corner.abs() > selection_semidimensions[1])
-			} || {
-				let projected_selection_corners = selection_corners.map(|corner| (corner - image.position).dot(gamma_hat));
-				projected_selection_corners[1] * projected_selection_corners[0] >= Vx2(0.)
-					&& projected_selection_corners[2] * projected_selection_corners[1] >= Vx2(0.)
-					&& projected_selection_corners[3] * projected_selection_corners[2] >= Vx2(0.)
-					&& projected_selection_corners.iter().fold(true, |acc, corner| acc && corner.abs() > image_semidimensions[0])
-			} || {
-				let projected_selection_corners = selection_corners.map(|corner| (corner - image.position).dot(delta_hat));
-				projected_selection_corners[1] * projected_selection_corners[0] >= Vx2(0.)
-					&& projected_selection_corners[2] * projected_selection_corners[1] >= Vx2(0.)
-					&& projected_selection_corners[3] * projected_selection_corners[2] >= Vx2(0.)
-					&& projected_selection_corners.iter().fold(true, |acc, corner| acc && corner.abs() > image_semidimensions[1])
-			};
+
+			let no_overlap = [alpha_hat, beta_hat].into_iter().enumerate().any(|(i, axis)| {
+				let projected_image_corners = image_corners.map(|corner| (corner - selection_center).dot(axis));
+				projected_image_corners.iter().all(|corner| corner <= &-selection_semidimensions[i]) || projected_image_corners.iter().all(|corner| corner >= &selection_semidimensions[i])
+			}) || [gamma_hat, delta_hat].into_iter().enumerate().any(|(i, axis)| {
+				let projected_selection_corners = selection_corners.map(|corner| (corner - image.position).dot(axis));
+				projected_selection_corners.iter().all(|corner| corner <= &-image_semidimensions[i]) || projected_selection_corners.iter().all(|corner| corner >= &image_semidimensions[i])
+			});
 
 			if should_aggregate {
-				image.is_selected = image.is_selected ^ !no_overlap;
+				image.is_selected ^= !no_overlap;
 			} else {
 				image.is_selected = !no_overlap;
 			}
 		}
 
 		'strokes: for stroke in self.strokes.iter_mut() {
-			if should_aggregate {
-				for point in stroke.points.iter() {
-					let point_position = (stroke.position + point.position.rotate(stroke.orientation) * stroke.dilation - screen_center).rotate(-tilt);
-					if point_position[0] >= min[0] && point_position[1] >= min[1] && point_position[0] <= max[0] && point_position[1] <= max[1] {
-						stroke.is_selected = !stroke.is_selected;
-						continue 'strokes;
-					}
+			for point in stroke.points.iter() {
+				let point_position = (stroke.position + point.position.rotate(stroke.orientation) * stroke.dilation - screen_center).rotate(-tilt);
+				if point_position[0] >= min[0] && point_position[1] >= min[1] && point_position[0] <= max[0] && point_position[1] <= max[1] {
+					stroke.is_selected = !should_aggregate || !stroke.is_selected;
+					continue 'strokes;
 				}
-			} else {
-				for point in stroke.points.iter() {
-					let point_position = (stroke.position + point.position.rotate(stroke.orientation) * stroke.dilation - screen_center).rotate(-tilt);
-					if point_position[0] >= min[0] && point_position[1] >= min[1] && point_position[0] <= max[0] && point_position[1] <= max[1] {
-						if stroke.is_selected == false {
-							stroke.is_selected = true;
-						}
-						continue 'strokes;
-					}
-				}
-				if stroke.is_selected == true {
-					stroke.is_selected = false;
-				}
+			}
+			if !should_aggregate && stroke.is_selected {
+				stroke.is_selected = false;
 			}
 		}
 	}

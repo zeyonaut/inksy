@@ -9,7 +9,6 @@ use std::{ops::Range, sync::Arc};
 
 use fast_srgb8::srgb8_to_f32;
 use pollster::FutureExt;
-use raw_window_handle::{HasRawDisplayHandle, HasRawWindowHandle};
 
 use super::{instance_renderer::InstanceRenderer, stroke_renderer::CanvasRenderer, texture::Texture, uniform_buffer::UniformBuffer, vertex_attributes::VertexAttributes};
 use crate::{
@@ -92,8 +91,8 @@ impl VertexAttributes<3> for ColorTrigonInstance {
 }
 
 // This struct stores the current state of the WGPU renderer.
-pub struct Renderer {
-	surface: wgpu::Surface,
+pub struct Renderer<'window> {
+	surface: wgpu::Surface<'window>,
 	pub device: wgpu::Device,
 	queue: wgpu::Queue,
 	pub config: wgpu::SurfaceConfiguration,
@@ -114,18 +113,20 @@ pub struct Renderer {
 	texture_format: wgpu::TextureFormat,
 }
 
-impl Renderer {
+impl<'window> Renderer<'window> {
 	// Create an instance of the renderer.
-	pub fn new<W>(window: &W, width: u32, height: u32, scale_factor: f32) -> Self
+	pub fn new<W>(window: &'window W, width: u32, height: u32, scale_factor: f32) -> Self
 	where
-		W: HasRawWindowHandle + HasRawDisplayHandle,
+		W: wgpu::rwh::HasWindowHandle + wgpu::rwh::HasDisplayHandle + Sync,
 	{
 		// We create a WGPU instance and a surface on our window to draw to.
 		let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
 			backends: wgpu::Backends::all(),
+			flags: Default::default(),
 			dx12_shader_compiler: Default::default(),
+			gles_minor_version: Default::default(),
 		});
-		let surface = unsafe { instance.create_surface(window) }.unwrap();
+		let surface = instance.create_surface(window).unwrap();
 
 		// We request an adapter (a graphics card) that can draw to this surface.
 		let adapter = instance
@@ -141,8 +142,8 @@ impl Renderer {
 		let (device, queue) = adapter
 			.request_device(
 				&wgpu::DeviceDescriptor {
-					features: wgpu::Features::empty(),
-					limits: wgpu::Limits::downlevel_defaults().using_resolution(adapter.limits()),
+					required_features: wgpu::Features::empty(),
+					required_limits: wgpu::Limits::downlevel_defaults().using_resolution(adapter.limits()),
 					label: None,
 				},
 				None,
@@ -162,6 +163,7 @@ impl Renderer {
 			width,
 			height,
 			present_mode: *surface_capabilities.present_modes.first().unwrap(),
+			desired_maximum_frame_latency: 2,
 			alpha_mode: *surface_capabilities.alpha_modes.first().unwrap(),
 			view_formats: vec![],
 		};
@@ -183,7 +185,7 @@ impl Renderer {
 		};
 		let sample_count = multisample_texture.as_ref().map_or(1, |_| 4);
 
-		let mut font_system = glyphon::FontSystem::new_with_fonts([glyphon::fontdb::Source::Binary(Arc::new(include_bytes!("../../ext/dejavu-sans-2.37/DejaVuSans.ttf").as_slice()))].into_iter());
+		let mut font_system = glyphon::FontSystem::new_with_fonts([glyphon::fontdb::Source::Binary(Arc::new(include_bytes!("../../ext/dejavu-sans-2.37/DejaVuSans.ttf").as_slice()))]);
 		font_system.db_mut().set_sans_serif_family("DejaVu Sans");
 		let swash_cache = glyphon::SwashCache::new();
 		let mut text_atlas = glyphon::TextAtlas::new(&device, &queue, texture_format);
@@ -209,7 +211,7 @@ impl Renderer {
 		buffer.set_wrap(&mut font_system, glyphon::Wrap::None);
 		let w = buffer.line_layout(&mut font_system, 0).unwrap().iter().fold(0., |a, x| a + x.w);
 		buffer.set_size(&mut font_system, w, font_size);
-		buffer.shape_until(&mut font_system, 1);
+		buffer.shape_until_scroll(&mut font_system, true);
 
 		let texture_bind_group_layout = Texture::bind_group_layout(&device);
 
@@ -412,10 +414,12 @@ impl Renderer {
 				resolve_target: multisample_view.as_ref().map(|_| &output_view),
 				ops: wgpu::Operations {
 					load: wgpu::LoadOp::Clear(background_color),
-					store: true,
+					store: wgpu::StoreOp::Store,
 				},
 			})],
 			depth_stencil_attachment: None,
+			timestamp_writes: None,
+			occlusion_query_set: None,
 		});
 
 		// TODO: Handle error?
@@ -464,10 +468,12 @@ impl Renderer {
 				resolve_target: None,
 				ops: wgpu::Operations {
 					load: wgpu::LoadOp::Clear(clear_color),
-					store: true,
+					store: wgpu::StoreOp::Store,
 				},
 			})],
 			depth_stencil_attachment: None,
+			timestamp_writes: None,
+			occlusion_query_set: None,
 		});
 
 		drop(render_pass);
@@ -489,7 +495,7 @@ impl Renderer {
 		let alignment = wgpu::COPY_BYTES_PER_ROW_ALIGNMENT as usize;
 		let row_padding = (alignment - source_bytes_per_row % alignment) % alignment;
 		let bytes_per_row = (source_bytes_per_row + row_padding) as u32;
-		let rows_per_image = texture.extent.height as u32;
+		let rows_per_image = texture.extent.height;
 
 		let output_buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
 			size: bytes_per_row as u64 * rows_per_image as u64,
