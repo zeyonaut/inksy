@@ -10,7 +10,7 @@ use std::time::{Duration, Instant};
 use winit::{
 	dpi::{PhysicalPosition, PhysicalSize},
 	event::*,
-	event_loop::{EventLoop, EventLoopWindowTarget},
+	event_loop::{ControlFlow, EventLoop, EventLoopWindowTarget},
 };
 
 #[cfg(target_os = "linux")]
@@ -142,7 +142,7 @@ impl<'window> App<'window> {
 			// Emitted when the event loop resumes.
 			Event::NewEvents(_) => {},
 			// Check if a window event has occurred.
-			Event::WindowEvent { ref event, window_id } if window_id == self.window.id() => {
+			Event::WindowEvent { ref event, window_id } if window_id == self.window.id() => 'window_event: {
 				match event {
 					// If the titlebar close button is clicked  or the escape key is pressed, exit the loop.
 					WindowEvent::CloseRequested => window_target.exit(),
@@ -204,14 +204,14 @@ impl<'window> App<'window> {
 							}
 							self.should_redraw = false;
 						}
+						window_target.set_control_flow(ControlFlow::Wait);
+						break 'window_event;
 					},
 
 					// Ignore all other window events.
-					_ => {},
+					_ => break 'window_event,
 				}
-			},
 
-			Event::AboutToWait => {
 				self.poll_tablet();
 				self.process_input();
 				self.window.request_redraw();
