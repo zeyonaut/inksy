@@ -8,13 +8,14 @@
 use std::{
 	fs::File,
 	io::{BufReader, BufWriter, Read, Write},
+	num::NonZero,
 	path::{Path, PathBuf},
 };
 
 use crate::{
 	canvas::{Canvas, Image, Point, Stroke, View},
 	render::Renderer,
-	utility::{Vex, Vx, Zoom, SRGB8, SRGBA8},
+	utility::{Tracked, Vex, Vx, Zoom, SRGB8, SRGBA8},
 };
 
 const MAGIC_NUMBERS: [u8; 8] = [b'I', b'N', b'K', b'S', b'Y', 0, 0, 0];
@@ -94,10 +95,13 @@ fn save_canvas_to_file_inner(canvas: &Canvas, renderer: &Renderer, file_path: &P
 		}
 	}
 
+	let mut is_texture_referenced_array = vec![false; canvas.textures.len()];
+
 	for image in canvas.images.iter() {
 		let position: [f32; 2] = [image.position[0].0, image.position[1].0];
 		let orientation: f32 = image.orientation;
 		let dilation: f32 = image.dilation;
+		is_texture_referenced_array[image.texture_index] = true;
 		let texture_index: u64 = u64::try_from(image.texture_index).ok()?;
 		let dimensions: [f32; 2] = [image.dimensions[0].0, image.dimensions[1].0];
 
@@ -110,28 +114,36 @@ fn save_canvas_to_file_inner(canvas: &Canvas, renderer: &Renderer, file_path: &P
 		file.write_all(&dimensions[1].to_le_bytes()).ok()?;
 	}
 
-	for (texture_index, texture) in canvas.textures.iter().enumerate() {
-		let dimensions: [u32; 2] = [texture.extent.width, texture.extent.height];
+	for ((texture_index, texture), is_texture_referenced) in canvas.textures.iter().enumerate().zip(is_texture_referenced_array) {
+		if is_texture_referenced {
+			let dimensions: [u32; 2] = [texture.extent.width, texture.extent.height];
 
-		file.write_all(&dimensions[0].to_le_bytes()).ok()?;
-		file.write_all(&dimensions[1].to_le_bytes()).ok()?;
+			file.write_all(&dimensions[0].to_le_bytes()).ok()?;
+			file.write_all(&dimensions[1].to_le_bytes()).ok()?;
 
-		let (buffer, bytes_per_row) = renderer.fetch_texture(canvas.textures.get(texture_index)?)?;
+			let (buffer, bytes_per_row) = renderer.fetch_texture(canvas.textures.get(texture_index)?)?;
 
-		// Map the buffer before calling get_mapped_range.
-		let buffer_slice = buffer.slice(..);
-		let (tx, rx) = futures_intrusive::channel::shared::oneshot_channel();
-		buffer_slice.map_async(wgpu::MapMode::Read, move |result| {
-			tx.send(result).unwrap();
-		});
-		renderer.device.poll(wgpu::Maintain::Wait);
-		pollster::block_on(rx.receive()).unwrap().unwrap();
+			// Map the buffer before calling get_mapped_range.
+			let buffer_slice = buffer.slice(..);
+			let (tx, rx) = futures_intrusive::channel::shared::oneshot_channel();
+			buffer_slice.map_async(wgpu::MapMode::Read, move |result| {
+				tx.send(result).unwrap();
+			});
+			renderer.device.poll(wgpu::Maintain::Wait);
+			pollster::block_on(rx.receive()).unwrap().unwrap();
 
-		for chunk in buffer.slice(..).get_mapped_range().chunks(bytes_per_row) {
-			file.write_all(&chunk[..texture.extent.width as usize * 4]).ok()?;
+			// Write the texture row-by-row (each an initial slice of a mapped chunk).
+			for chunk in buffer.slice(..).get_mapped_range().chunks(bytes_per_row) {
+				file.write_all(&chunk[..texture.extent.width as usize * 4]).ok()?;
+			}
+
+			buffer.unmap();
+		} else {
+			let dimensions: [u32; 2] = [0; 2];
+
+			file.write_all(&dimensions[0].to_le_bytes()).ok()?;
+			file.write_all(&dimensions[1].to_le_bytes()).ok()?;
 		}
-
-		buffer.unmap();
 	}
 
 	Some(())
@@ -197,12 +209,24 @@ pub fn load_canvas_from_file(renderer: &mut Renderer, file_path: PathBuf) -> Opt
 		);
 	}
 
+	let mut revised_texture_index_array = Vec::with_capacity(texture_count as usize);
+	let mut revised_texture_index = 0;
 	let mut textures = Vec::with_capacity((texture_count as usize).min(128));
 	for _ in 0..texture_count {
+		revised_texture_index_array.push(revised_texture_index);
 		let [width, height] = read_u32s(&mut file)?;
-		let mut buffer = vec![0; width as usize * 4 * height as usize];
-		file.read_exact(&mut buffer).ok()?;
-		textures.push(renderer.create_texture([width, height], buffer));
+		// If either dimension are zero, no texture was saved.
+		if let [Ok(width), Ok(height)] = [width, height].map(NonZero::try_from) {
+			let mut buffer = vec![0; width.get() as usize * 4 * height.get() as usize];
+			file.read_exact(&mut buffer).ok()?;
+			textures.push(renderer.create_texture([width, height], buffer));
+			revised_texture_index += 1;
+		}
+	}
+
+	// Rebase the image texture indices.
+	for image in images.iter_mut().map(Tracked::as_mut) {
+		image.texture_index = revised_texture_index_array[image.texture_index];
 	}
 
 	Some(Canvas::from_file(

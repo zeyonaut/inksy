@@ -5,6 +5,8 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
+use std::num::NonZeroU32;
+
 pub struct Texture {
 	rgba: Option<Vec<u8>>,
 	pub texture: wgpu::Texture,
@@ -12,10 +14,10 @@ pub struct Texture {
 	bind_group: wgpu::BindGroup,
 }
 
-fn create_bind_group(device: &wgpu::Device, bind_group_layout: &wgpu::BindGroupLayout, sampler: &wgpu::Sampler, dimensions: [u32; 2]) -> (wgpu::Texture, wgpu::Extent3d, wgpu::BindGroup) {
+fn create_bind_group(device: &wgpu::Device, bind_group_layout: &wgpu::BindGroupLayout, sampler: &wgpu::Sampler, dimensions: [NonZeroU32; 2]) -> (wgpu::Texture, wgpu::Extent3d, wgpu::BindGroup) {
 	let texture_size = wgpu::Extent3d {
-		width: dimensions[0],
-		height: dimensions[1],
+		width: dimensions[0].into(),
+		height: dimensions[1].into(),
 		depth_or_array_layers: 1,
 	};
 	let texture = device.create_texture(&wgpu::TextureDescriptor {
@@ -71,7 +73,7 @@ impl Texture {
 		})
 	}
 
-	pub fn new(device: &wgpu::Device, dimensions: [u32; 2], image: Vec<u8>, bind_group_layout: &wgpu::BindGroupLayout) -> Self {
+	pub fn new(device: &wgpu::Device, dimensions: [NonZeroU32; 2], image: Vec<u8>, bind_group_layout: &wgpu::BindGroupLayout) -> Self {
 		let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
 			address_mode_u: wgpu::AddressMode::ClampToEdge,
 			address_mode_v: wgpu::AddressMode::ClampToEdge,

@@ -502,9 +502,7 @@ impl<'window> App<'window> {
 						if self.is_cursor_relevant {
 							self.window.set_cursor_icon(winit::window::CursorIcon::Grab);
 						}
-						if initial.is_some() {
-							*initial = None;
-						}
+						*initial = None;
 					}
 
 					if let Some(OrbitInitial { tilt, cursor_angle }) = initial {
@@ -526,9 +524,9 @@ impl<'window> App<'window> {
 					} else if let Some(origin) = origin.take() {
 						let selection_offset = canvas.view.position + cursor_virtual_position - origin;
 
-						let selected_image_indices = canvas.images().iter().enumerate().filter_map(|(index, image)| if image.is_selected { Some(index) } else { None }).collect::<Vec<_>>();
+						let selected_image_indices = canvas.images().iter().enumerate().filter_map(|(index, image)| image.is_selected.then_some(index)).collect::<Vec<_>>();
 
-						let selected_stroke_indices = canvas.strokes().iter().enumerate().filter_map(|(index, stroke)| if stroke.is_selected { Some(index) } else { None }).collect::<Vec<_>>();
+						let selected_stroke_indices = canvas.strokes().iter().enumerate().filter_map(|(index, stroke)| stroke.is_selected.then_some(index)).collect::<Vec<_>>();
 
 						if !selected_image_indices.is_empty() || !selected_stroke_indices.is_empty() {
 							canvas.perform_operation(Operation::TranslateObjects {

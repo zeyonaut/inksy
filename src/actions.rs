@@ -5,6 +5,8 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
+use std::num::NonZero;
+
 use enumset::EnumSet;
 
 use crate::{
@@ -407,13 +409,16 @@ fn paste(app: &mut App) {
 					}
 				}
 			},
-			Some(ClipboardData::Image { dimensions, data }) => {
+			Some(ClipboardData::Image { dimensions, data }) => 'empty: {
+				let Ok(width) = NonZero::try_from(dimensions[0]) else { break 'empty };
+				let Ok(height) = NonZero::try_from(dimensions[1]) else { break 'empty };
+				let dimensions = [width, height];
 				let texture_index = canvas.push_texture(&app.renderer, dimensions, data);
 
 				canvas.perform_operation(Operation::CommitImages {
 					images: vec![Image {
 						texture_index,
-						dimensions: Vex(dimensions.map(|x| Vx(x as f32))),
+						dimensions: Vex(dimensions.map(|x| Vx(x.get() as f32))),
 						position: canvas.view.position,
 						orientation: canvas.view.tilt,
 						dilation: 1.,

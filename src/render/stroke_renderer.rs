@@ -93,8 +93,9 @@ impl CanvasRenderer {
 
 		let mut image_texture_indices = Vec::new();
 
-		// Then, we iterate through the uninvalidated images and update their instances if necessary.
-		for (i, image) in canvas.images[0..canvas.base_dirty_image_index].iter_mut().enumerate() {
+		// Then, we iterate through the uninvalidated images and update their instances one at at time, only if necessary.
+		let instance_offset = canvas.base_dirty_image_index.min(canvas.images.len());
+		for (i, image) in canvas.images[0..instance_offset].iter_mut().enumerate() {
 			let image_texture_index = if let Some(image) = image.read_if_dirty() {
 				if let Some(texture) = canvas.textures.get(image.texture_index) {
 					self.image_instance_renderer.prepare(
@@ -120,7 +121,6 @@ impl CanvasRenderer {
 		}
 
 		// Next, we iterate through the invalidated images and update their instances in one go.
-		let instance_offset = canvas.base_dirty_image_index;
 		let invalidated_images = canvas.images[instance_offset..].as_mut();
 
 		self.image_instance_assembly.clear();

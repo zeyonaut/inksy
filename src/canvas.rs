@@ -5,7 +5,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-use std::path::PathBuf;
+use std::{num::NonZeroU32, path::PathBuf};
 
 use crate::{
 	config::Config,
@@ -620,7 +620,7 @@ impl Canvas {
 		}
 	}
 
-	pub fn push_texture(&mut self, renderer: &Renderer, dimensions: [u32; 2], image: Vec<u8>) -> usize {
+	pub fn push_texture(&mut self, renderer: &Renderer, dimensions: [NonZeroU32; 2], image: Vec<u8>) -> usize {
 		self.textures.push(renderer.create_texture(dimensions, image));
 		self.textures.len() - 1
 	}

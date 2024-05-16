@@ -5,7 +5,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-use std::{ops::Range, sync::Arc};
+use std::{num::NonZeroU32, ops::Range, sync::Arc};
 
 use fast_srgb8::srgb8_to_f32;
 use pollster::FutureExt;
@@ -485,7 +485,7 @@ impl<'window> Renderer<'window> {
 		Ok(output)
 	}
 
-	pub fn create_texture(&self, dimensions: [u32; 2], image: Vec<u8>) -> Texture {
+	pub fn create_texture(&self, dimensions: [NonZeroU32; 2], image: Vec<u8>) -> Texture {
 		Texture::new(&self.device, dimensions, image, &self.texture_bind_group_layout)
 	}
 
