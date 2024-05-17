@@ -411,7 +411,13 @@ impl<'window> App<'window> {
 
 						if let Some(current_stroke) = current_stroke {
 							let offset = canvas.view.position + cursor_virtual_position - current_stroke.position;
-							current_stroke.add_point(offset, self.pressure.map_or(1., |pressure| (pressure / 32767.) as f32))
+							current_stroke.add_point(
+								offset,
+								self.pressure.map_or(1., |pressure| {
+									let x = (pressure / 32767.) as f32;
+									x * (17. + x * -18. + x * x * 7.) / 6.
+								}),
+							)
 						}
 					} else if let Some(stroke) = current_stroke.take() {
 						canvas.perform_operation(Operation::CommitStrokes { strokes: vec![stroke.finalize().into()] });
