@@ -5,12 +5,19 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-use std::{num::NonZeroU32, ops::Range, sync::Arc};
+use std::{borrow::Cow, num::NonZeroU32, ops::Range, sync::Arc};
 
 use fast_srgb8::srgb8_to_f32;
 use pollster::FutureExt;
 
-use super::{instance_renderer::InstanceRenderer, stroke_renderer::CanvasRenderer, texture::Texture, uniform_buffer::UniformBuffer, vertex_attributes::VertexAttributes};
+use super::{
+	instance_renderer::InstanceRenderer,
+	stroke_renderer::CanvasRenderer,
+	text_renderer::{self, Align, TextInstance, TextRenderer},
+	texture::Texture,
+	uniform_buffer::UniformBuffer,
+	vertex_attributes::VertexAttributes,
+};
 use crate::{
 	canvas::{Canvas, IncompleteStroke},
 	config::Config,
@@ -19,7 +26,8 @@ use crate::{
 
 const SHOULD_MULTISAMPLE: bool = false;
 
-pub enum DrawCommand {
+pub enum DrawCommand<'a> {
+	Text { text: Cow<'a, str>, align: Option<Align>, position: Vex<2, Px>, anchors: [f32; 2] },
 	Card { position: Vex<2, Px>, dimensions: Vex<2, Px>, color: [u8; 4], radius: Px },
 	ColorSelector { position: Vex<2, Px>, hsv: [f32; 3], trigon_radius: Px, hole_radius: Px, ring_width: Px },
 }
@@ -92,25 +100,27 @@ impl VertexAttributes<3> for ColorTrigonInstance {
 
 // This struct stores the current state of the WGPU renderer.
 pub struct Renderer<'window> {
+	// Rendering machinery.
 	surface: wgpu::Surface<'window>,
 	pub device: wgpu::Device,
 	queue: wgpu::Queue,
+	// Properties.
 	pub config: wgpu::SurfaceConfiguration,
+	surface_format: wgpu::TextureFormat,
 	pub scale_factor: f32,
 	pub is_pending_resize: bool,
-	viewport_buffer: UniformBuffer<ViewportUniform>,
-	texture_bind_group_layout: wgpu::BindGroupLayout,
-	text_renderer: glyphon::TextRenderer,
-	font_system: glyphon::FontSystem,
-	text_atlas: glyphon::TextAtlas,
-	buffer: glyphon::Buffer,
-	swash_cache: glyphon::SwashCache,
+	// Text rendering.
+	text_renderer: TextRenderer,
+	info_text: TextInstance,
+	// Other renderers.
 	canvas_renderer: CanvasRenderer,
 	card_renderer: InstanceRenderer<CardInstance>,
 	color_ring_renderer: InstanceRenderer<ColorRingInstance>,
 	color_trigon_renderer: InstanceRenderer<ColorTrigonInstance>,
+	// Other resource handles.
+	viewport_buffer: UniformBuffer<ViewportUniform>,
+	texture_bind_group_layout: wgpu::BindGroupLayout,
 	multisample_texture: Option<wgpu::Texture>,
-	texture_format: wgpu::TextureFormat,
 }
 
 impl<'window> Renderer<'window> {
@@ -155,11 +165,11 @@ impl<'window> Renderer<'window> {
 		// FIXME: Ensure dimensions are nonzero.
 		let surface_capabilities = surface.get_capabilities(&adapter);
 
-		let texture_format = surface_capabilities.formats.iter().find(|f| f.is_srgb()).copied().unwrap_or(*surface_capabilities.formats.first().unwrap());
+		let surface_format = surface_capabilities.formats.iter().find(|f| f.is_srgb()).copied().unwrap_or(*surface_capabilities.formats.first().unwrap());
 
 		let config = wgpu::SurfaceConfiguration {
 			usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_DST,
-			format: texture_format,
+			format: surface_format,
 			width,
 			height,
 			present_mode: *surface_capabilities.present_modes.first().unwrap(),
@@ -169,14 +179,14 @@ impl<'window> Renderer<'window> {
 		};
 		surface.configure(&device, &config);
 
-		let multisample_texture = if adapter.get_texture_format_features(texture_format).flags.sample_count_supported(4) && SHOULD_MULTISAMPLE {
+		let multisample_texture = if SHOULD_MULTISAMPLE && adapter.get_texture_format_features(surface_format).flags.sample_count_supported(4) {
 			Some(device.create_texture(&wgpu::TextureDescriptor {
 				label: None,
 				size: wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
 				mip_level_count: 1,
 				sample_count: 4,
 				dimension: wgpu::TextureDimension::D2,
-				format: texture_format,
+				format: surface_format,
 				usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
 				view_formats: vec![].as_slice(),
 			}))
@@ -185,33 +195,17 @@ impl<'window> Renderer<'window> {
 		};
 		let sample_count = multisample_texture.as_ref().map_or(1, |_| 4);
 
-		let mut font_system = glyphon::FontSystem::new_with_fonts([glyphon::fontdb::Source::Binary(Arc::new(include_bytes!("../../ext/dejavu-sans-2.37/DejaVuSans.ttf").as_slice()))]);
-		font_system.db_mut().set_sans_serif_family("DejaVu Sans");
-		let swash_cache = glyphon::SwashCache::new();
-		let mut text_atlas = glyphon::TextAtlas::new(&device, &queue, texture_format);
-		let text_renderer = glyphon::TextRenderer::new(
-			&mut text_atlas,
-			&device,
-			wgpu::MultisampleState {
-				count: sample_count,
-				mask: !0,
-				alpha_to_coverage_enabled: false,
-			},
-			None,
-		);
-		let font_size = 13.;
-		let mut buffer = glyphon::Buffer::new(&mut font_system, glyphon::Metrics::new(font_size, font_size));
-		// Set the text, and resize the buffer to fit it perfectly.
-		buffer.set_text(
-			&mut font_system,
+		let mut text_renderer = TextRenderer::new(&device, &queue, surface_format, sample_count);
+
+		let info_text = TextInstance::new(
+			&mut text_renderer,
 			"Press Ctrl + N to open a new canvas or Ctrl + O to load an existing canvas.",
-			glyphon::Attrs::new().stretch(glyphon::Stretch::Condensed),
-			glyphon::Shaping::Basic,
+			13.,
+			1.25,
+			Some(Align::Center),
+			Vex([width as f32 / 2., height as f32 / 2.].map(Px)),
+			[0.5, 0.5],
 		);
-		buffer.set_wrap(&mut font_system, glyphon::Wrap::None);
-		let w = buffer.line_layout(&mut font_system, 0).unwrap().iter().fold(0., |a, x| a + x.w);
-		buffer.set_size(&mut font_system, w, font_size);
-		buffer.shape_until_scroll(&mut font_system, true);
 
 		let texture_bind_group_layout = Texture::bind_group_layout(&device);
 
@@ -244,16 +238,13 @@ impl<'window> Renderer<'window> {
 			viewport_buffer,
 			texture_bind_group_layout,
 			text_renderer,
-			font_system,
-			text_atlas,
-			buffer,
-			swash_cache,
+			info_text,
 			canvas_renderer,
 			card_renderer,
 			color_ring_renderer,
 			color_trigon_renderer,
 			multisample_texture,
-			texture_format,
+			surface_format,
 		}
 	}
 
@@ -273,11 +264,12 @@ impl<'window> Renderer<'window> {
 					mip_level_count: 1,
 					sample_count: 4,
 					dimension: wgpu::TextureDimension::D2,
-					format: self.texture_format,
+					format: self.surface_format,
 					usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
 					view_formats: vec![].as_slice(),
 				})
 			}
+			self.info_text.position = Vex([width as f32 / 2., height as f32 / 2.].map(Px));
 		}
 	}
 
@@ -315,11 +307,13 @@ impl<'window> Renderer<'window> {
 		let mut card_instances: Vec<CardInstance> = vec![];
 		let mut color_ring_instances: Vec<ColorRingInstance> = vec![];
 		let mut color_trigon_instances: Vec<ColorTrigonInstance> = vec![];
+		let mut text_instances: Vec<TextInstance> = vec![];
 
 		let mut render_commands: Vec<RenderCommand> = vec![];
 
 		for draw_command in draw_commands {
 			match draw_command {
+				DrawCommand::Text { text, align, position, anchors } => text_instances.push(TextInstance::new(&mut self.text_renderer, &text, 13., 1.25, align, position, anchors)),
 				DrawCommand::Card { position, dimensions, color, radius } => {
 					let instance_start = card_instances.len() as u32;
 					card_instances.push(CardInstance {
@@ -357,44 +351,21 @@ impl<'window> Renderer<'window> {
 			}
 		}
 
-		let should_render_test_text = canvas.is_none();
+		// Prepare text.
+		let should_render_info_text = canvas.is_none();
+		self.text_renderer.prepare(
+			&self.device,
+			&self.queue,
+			should_render_info_text.then_some(&self.info_text).into_iter().chain(&text_instances),
+			self.config.width,
+			self.config.height,
+			self.scale_factor,
+		);
 
+		// Prepare shapes.
 		self.card_renderer.prepare(&self.device, &self.queue, 0, &card_instances);
 		self.color_ring_renderer.prepare(&self.device, &self.queue, 0, &color_ring_instances);
 		self.color_trigon_renderer.prepare(&self.device, &self.queue, 0, &color_trigon_instances);
-
-		// Display the text in the center of the screen.
-		let buffer_size = self.buffer.size();
-
-		// TODO: Handle error.
-		if should_render_test_text {
-			self.text_renderer
-				.prepare(
-					&self.device,
-					&self.queue,
-					&mut self.font_system,
-					&mut self.text_atlas,
-					glyphon::Resolution {
-						width: self.config.width,
-						height: self.config.height,
-					},
-					[glyphon::TextArea {
-						buffer: &self.buffer,
-						left: (self.config.width as f32 - buffer_size.0 * self.scale_factor) / 2.,
-						top: (self.config.height as f32 - buffer_size.1 * self.scale_factor) / 2.,
-						scale: self.scale_factor,
-						bounds: glyphon::TextBounds {
-							left: 0,
-							top: 0,
-							right: self.config.width as i32,
-							bottom: self.config.height as i32,
-						},
-						default_color: glyphon::Color::rgb(0xff, 0xff, 0xff),
-					}],
-					&mut self.swash_cache,
-				)
-				.unwrap();
-		}
 
 		// Set up the surface texture we will later render to.
 		let output = self.surface.get_current_texture()?;
@@ -422,11 +393,6 @@ impl<'window> Renderer<'window> {
 			occlusion_query_set: None,
 		});
 
-		// TODO: Handle error?
-		if should_render_test_text {
-			self.text_renderer.render(&self.text_atlas, &mut render_pass).unwrap();
-		}
-
 		self.viewport_buffer.activate(&mut render_pass, 0);
 
 		if let (Some(canvas), Some(canvas_render_key)) = (canvas, canvas_render_key) {
@@ -440,6 +406,8 @@ impl<'window> Renderer<'window> {
 				RenderCommand::ColorTrigon(instance_range) => self.color_trigon_renderer.render(&mut render_pass, instance_range),
 			}
 		}
+
+		self.text_renderer.render(&mut render_pass);
 
 		drop(render_pass);
 

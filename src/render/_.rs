@@ -10,6 +10,7 @@ mod dynamic_storage_buffer;
 mod instance_renderer;
 mod renderer;
 pub mod stroke_renderer;
+pub mod text_renderer;
 pub mod texture;
 mod uniform_buffer;
 pub mod vertex_attributes;

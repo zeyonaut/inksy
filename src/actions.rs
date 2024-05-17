@@ -27,6 +27,7 @@ pub fn default_keymap() -> Keymap {
 	const NONE: EnumSet<Key> = EnumSet::EMPTY;
 	use Key::*;
 
+	keymap.insert(NONE, F3, false, trigger(toggle_debug_mode));
 	keymap.insert(Control | Shift, S, false, trigger(save_as_file));
 	keymap.insert(Control, S, false, trigger(save_file));
 	keymap.insert(Control, O, false, trigger(load_from_file));
@@ -69,6 +70,10 @@ pub fn discovery(on_press: fn(&mut App), on_release: fn(&mut App)) -> Action {
 }
 
 // Actions:
+
+fn toggle_debug_mode(app: &mut App) {
+	app.is_debug_mode_on ^= true;
+}
 
 fn save_as_file(app: &mut App) {
 	if let Some(canvas) = app.current_canvas_index.and_then(|x| app.canvases.get_mut(x)) {

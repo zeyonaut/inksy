@@ -17,6 +17,18 @@ use winit::event::{ElementState, KeyEvent};
 
 #[derive(EnumSetType)]
 pub enum Key {
+	F1,
+	F2,
+	F3,
+	F4,
+	F5,
+	F6,
+	F7,
+	F8,
+	F9,
+	F10,
+	F11,
+	F12,
 	K0,
 	K1,
 	K2,
@@ -98,6 +110,18 @@ impl InputMonitor {
 		use winit::keyboard::KeyCode;
 		use Key::*;
 		let key = match keycode {
+			KeyCode::F1 => F1,
+			KeyCode::F2 => F2,
+			KeyCode::F3 => F3,
+			KeyCode::F4 => F4,
+			KeyCode::F5 => F5,
+			KeyCode::F6 => F6,
+			KeyCode::F7 => F7,
+			KeyCode::F8 => F8,
+			KeyCode::F9 => F9,
+			KeyCode::F10 => F10,
+			KeyCode::F11 => F11,
+			KeyCode::F12 => F12,
 			KeyCode::Digit1 => K0,
 			KeyCode::Digit2 => K1,
 			KeyCode::Digit3 => K2,

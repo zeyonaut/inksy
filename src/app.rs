@@ -26,9 +26,9 @@ use crate::{
 		keymap::{execute_keymap, Keymap},
 		Button, InputMonitor, Key,
 	},
-	render::{stroke_renderer::SelectionTransformation, DrawCommand, Renderer},
+	render::{stroke_renderer::SelectionTransformation, text_renderer::Align, DrawCommand, Renderer},
 	tools::*,
-	utility::{Lx, Px, Scale, Vex, Zero, Zoom},
+	utility::{Lx, Px, Scale, Vex, Vx, Zero, Zoom},
 	APP_NAME_CAPITALIZED,
 };
 
@@ -56,6 +56,7 @@ pub struct App<'window> {
 	pub clipboard: Clipboard,
 	pub pending_resize: Option<winit::dpi::PhysicalSize<u32>>,
 	pub should_redraw: bool,
+	pub is_debug_mode_on: bool,
 	pub renderer: Renderer<'window>,
 	pub cursor_physical_position: Vex<2, Px>,
 	pub scale: Scale,
@@ -107,6 +108,7 @@ impl<'window> App<'window> {
 			clipboard: Clipboard::new().unwrap(),
 			pending_resize: None,
 			should_redraw: false,
+			is_debug_mode_on: false,
 			renderer,
 			scale: Scale(scale_factor),
 			cursor_physical_position: Vex::ZERO,
@@ -368,6 +370,18 @@ impl<'window> App<'window> {
 					});
 				},
 				_ => {},
+			}
+
+			if self.is_debug_mode_on {
+				let [x, y] = canvas.view.position.0.map(|Vx(a)| a);
+				let zoom = canvas.view.zoom.0;
+				let tilt = canvas.view.tilt;
+				draw_commands.push(DrawCommand::Text {
+					text: format!("position: ({x:.0}, {y:.0})\nzoom: {zoom:.2}\ntilt: {tilt:.2}").into(),
+					align: Some(Align::Right),
+					position: Vex([Px(self.renderer.config.width as f32 - self.scale.0 * 4.), Px(self.scale.0 * 4.)]),
+					anchors: [1., 0.],
+				});
 			}
 		}
 
