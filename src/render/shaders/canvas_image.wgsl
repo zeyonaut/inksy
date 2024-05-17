@@ -95,7 +95,22 @@ fn blurred_step(edge: f32, value: f32) -> f32 {
 
 @fragment
 fn fs_main(in: ClipVertex) -> @location(0) vec4f {
-	let texture_color = textureSample(atlas_texture, atlas_sampler, in.texture_coordinates);
+	let d_tex_d_pix_x = length(dpdx(in.texture_coordinates_by_pixel));
+	let d_tex_d_pix_y = length(dpdy(in.texture_coordinates_by_pixel));
+	var texture_color: vec4f;
+	if max(d_tex_d_pix_x, d_tex_d_pix_y) >= 1. {
+		// Minification. (Uses sampler's minification).
+		texture_color = textureSample(atlas_texture, atlas_sampler, in.texture_coordinates);
+	} else {
+		// Magnification. (Pixel-friendly antialiasing; requires nearest-neighbor magnification on sampler.)
+		// Doesn't give perfect results, but it appears better than nothing.
+		let factor = 0.5;
+		let a = textureSample(atlas_texture, atlas_sampler, in.texture_coordinates - factor * vec2f(0., 0.) / (in.sprite_semidimensions * 2.));
+		let b = textureSample(atlas_texture, atlas_sampler, in.texture_coordinates - factor * vec2f(d_tex_d_pix_x, 0.) / (in.sprite_semidimensions * 2.));
+		let c = textureSample(atlas_texture, atlas_sampler, in.texture_coordinates - factor * vec2f(0., d_tex_d_pix_y) / (in.sprite_semidimensions * 2.));
+		let d = textureSample(atlas_texture, atlas_sampler, in.texture_coordinates - factor * vec2f(d_tex_d_pix_x, d_tex_d_pix_y) / (in.sprite_semidimensions * 2.));
+		texture_color = mix(mix(a, b, 0.5), mix(c, d, 0.5), 0.5);
+	};
 	// Each coordinate of frag_position ranges from 0 (center of image) to 1 (edge of image).
 	// We can use this for antialiasing image edges.
 	let dist_from_edge = in.sprite_semidimensions + in.blur_border_dimensions - abs(in.texture_coordinates_by_pixel);
