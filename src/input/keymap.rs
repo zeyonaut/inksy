@@ -25,6 +25,7 @@ pub struct Keytest {
 
 pub struct Keymap {
 	keytests: HashMap<EnumSet<Key>, Keytest>,
+	#[allow(clippy::type_complexity)]
 	waiting_releases: Vec<(EnumSet<Key>, fn(&mut App))>,
 }
 

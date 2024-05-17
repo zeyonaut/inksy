@@ -5,7 +5,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-use std::{borrow::Cow, num::NonZeroU32, ops::Range, sync::Arc};
+use std::{borrow::Cow, num::NonZeroU32, ops::Range};
 
 use fast_srgb8::srgb8_to_f32;
 use pollster::FutureExt;
@@ -13,7 +13,7 @@ use pollster::FutureExt;
 use super::{
 	instance_renderer::InstanceRenderer,
 	stroke_renderer::CanvasRenderer,
-	text_renderer::{self, Align, TextInstance, TextRenderer},
+	text_renderer::{Align, TextInstance, TextRenderer},
 	texture::Texture,
 	uniform_buffer::UniformBuffer,
 	vertex_attributes::VertexAttributes,

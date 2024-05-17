@@ -9,19 +9,19 @@ use std::fs::File;
 
 use kdl::{KdlDocument, KdlValue};
 
-use crate::utility::{Vx, SRGB8};
+use crate::utility::{Srgb8, Vx};
 
 pub struct Config {
-	pub default_canvas_color: SRGB8,
-	pub default_stroke_color: SRGB8,
+	pub default_canvas_color: Srgb8,
+	pub default_stroke_color: Srgb8,
 	pub default_stroke_radius: Vx,
 }
 
 impl Default for Config {
 	fn default() -> Self {
 		Self {
-			default_canvas_color: SRGB8([0x12, 0x12, 0x12]),
-			default_stroke_color: SRGB8([0xff, 0xff, 0xff]),
+			default_canvas_color: Srgb8([0x12, 0x12, 0x12]),
+			default_stroke_color: Srgb8([0xff, 0xff, 0xff]),
 			default_stroke_radius: Vx(4.),
 		}
 	}
@@ -46,8 +46,8 @@ impl Config {
 
 		let default = Self::default();
 
-		let default_canvas_color = parse_kdl_integer_array(inksy_config_document.get_args("default-canvas-color")).map(SRGB8).unwrap_or(default.default_canvas_color);
-		let default_stroke_color = parse_kdl_integer_array(inksy_config_document.get_args("default-stroke-color")).map(SRGB8).unwrap_or(default.default_stroke_color);
+		let default_canvas_color = parse_kdl_integer_array(inksy_config_document.get_args("default-canvas-color")).map(Srgb8).unwrap_or(default.default_canvas_color);
+		let default_stroke_color = parse_kdl_integer_array(inksy_config_document.get_args("default-stroke-color")).map(Srgb8).unwrap_or(default.default_stroke_color);
 		let default_stroke_radius = parse_kdl_f64(inksy_config_document.get_args("default-stroke-radius")).map(|x| Vx(x as _)).unwrap_or(default.default_stroke_radius);
 		Some(Config {
 			default_canvas_color,

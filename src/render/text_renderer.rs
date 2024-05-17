@@ -7,8 +7,6 @@
 
 use std::sync::Arc;
 
-use wgpu::core::device::queue;
-
 use crate::utility::{Px, Vex};
 
 pub struct TextRenderer {
@@ -119,6 +117,4 @@ impl TextInstance {
 			anchors,
 		}
 	}
-
-	pub fn set_text(&mut self, renderer: &mut TextRenderer) {}
 }

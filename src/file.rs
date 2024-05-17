@@ -15,7 +15,7 @@ use std::{
 use crate::{
 	canvas::{Canvas, Image, Point, Stroke, View},
 	render::Renderer,
-	utility::{Tracked, Vex, Vx, Zoom, SRGB8, SRGBA8},
+	utility::{Srgb8, Srgba8, Tracked, Vex, Vx, Zoom},
 };
 
 const MAGIC_NUMBERS: [u8; 8] = [b'I', b'N', b'K', b'S', b'Y', 0, 0, 0];
@@ -186,7 +186,7 @@ pub fn load_canvas_from_file(renderer: &mut Renderer, file_path: PathBuf) -> Opt
 			points.push(Point { position: Vex(position.map(Vx)), pressure })
 		}
 
-		strokes.push(Stroke::new(SRGBA8(color), Vx(stroke_radius), points, Vex(position.map(Vx)), orientation, dilation).into());
+		strokes.push(Stroke::new(Srgba8(color), Vx(stroke_radius), points, Vex(position.map(Vx)), orientation, dilation).into());
 	}
 
 	let mut images = Vec::with_capacity((image_count as usize).min(128));
@@ -231,8 +231,8 @@ pub fn load_canvas_from_file(renderer: &mut Renderer, file_path: PathBuf) -> Opt
 
 	Some(Canvas::from_file(
 		file_path,
-		SRGB8(background_color),
-		SRGB8(stroke_color),
+		Srgb8(background_color),
+		Srgb8(stroke_color),
 		Vx(stroke_radius),
 		View {
 			position: Vex(position.map(Vx)),

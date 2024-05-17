@@ -199,6 +199,7 @@ pub struct StrokeRenderer {
 }
 
 impl StrokeRenderer {
+	#[allow(clippy::too_many_arguments)]
 	pub fn new<'a>(
 		device: &wgpu::Device,
 		texture_format: wgpu::TextureFormat,

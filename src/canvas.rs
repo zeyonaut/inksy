@@ -10,7 +10,7 @@ use std::{num::NonZeroU32, path::PathBuf};
 use crate::{
 	config::Config,
 	render::{stroke_renderer::SelectionTransformation, texture::Texture, Renderer},
-	utility::{Tracked, Vex, Vx, Vx2, Zero, Zoom, HSV, SRGB8, SRGBA8},
+	utility::{Hsv, Srgb8, Srgba8, Tracked, Vex, Vx, Vx2, Zero, Zoom},
 };
 
 #[derive(Clone)]
@@ -43,7 +43,7 @@ pub struct Stroke {
 
 	// Modifiable data.
 	pub is_selected: bool,
-	pub color: SRGBA8,
+	pub color: Srgba8,
 
 	// Geometry parameters.
 	pub stroke_radius: Vx,
@@ -55,7 +55,7 @@ pub struct Stroke {
 }
 
 impl Stroke {
-	pub fn new(color: SRGBA8, stroke_radius: Vx, points: Vec<Point>, position: Vex<2, Vx>, orientation: f32, dilation: f32) -> Self {
+	pub fn new(color: Srgba8, stroke_radius: Vx, points: Vec<Point>, position: Vex<2, Vx>, orientation: f32, dilation: f32) -> Self {
 		let (vertices, relative_indices) = Self::compute_geometry(&points, stroke_radius);
 
 		Self {
@@ -121,9 +121,11 @@ impl Stroke {
 
 				if cross_product > Vx2(0.) {
 					/* Clockwise */
+					#[allow(clippy::identity_op)]
 					indices.extend([2, 4 + 0, 4 + 1].map(|n| n + i * 4));
 				} else if cross_product < Vx2(0.) {
 					/* Counterclockwise */
+					#[allow(clippy::identity_op)]
 					indices.extend([3, 4 + 1, 4 + 0].map(|n| n + i * 4));
 				}
 			}
@@ -136,7 +138,7 @@ impl Stroke {
 #[derive(Clone)]
 pub struct IncompleteStroke {
 	pub position: Vex<2, Vx>,
-	pub color: SRGBA8,
+	pub color: Srgba8,
 	pub radius: Vx,
 	pub points: Vec<Point>,
 	pub max_pressure: f32,
@@ -200,8 +202,8 @@ enum Retraction {
 		antitone_index_stroke_pairs: Vec<(usize, Stroke)>,
 	},
 	RecolorStrokes {
-		index_color_pairs: Vec<(usize, SRGBA8)>,
-		new_color: SRGBA8,
+		index_color_pairs: Vec<(usize, Srgba8)>,
+		new_color: Srgba8,
 	},
 	TranslateObjects {
 		image_indices: Vec<usize>,
@@ -226,7 +228,7 @@ pub enum Operation {
 	CommitStrokes { strokes: Vec<Tracked<Stroke>> },
 	CommitImages { images: Vec<Tracked<Image>> },
 	DeleteObjects { monotone_image_indices: Vec<usize>, monotone_stroke_indices: Vec<usize> },
-	RecolorStrokes { indices: Vec<usize>, new_color: SRGBA8 },
+	RecolorStrokes { indices: Vec<usize>, new_color: Srgba8 },
 	TranslateObjects { image_indices: Vec<usize>, stroke_indices: Vec<usize>, vector: Vex<2, Vx> },
 	RotateObjects { image_indices: Vec<usize>, stroke_indices: Vec<usize>, center: Vex<2, Vx>, angle: f32 },
 	ResizeObjects { image_indices: Vec<usize>, stroke_indices: Vec<usize>, center: Vex<2, Vx>, dilation: f32 },
@@ -246,8 +248,8 @@ impl View {
 
 pub struct Canvas {
 	pub file_path: Option<PathBuf>,
-	pub background_color: SRGB8,
-	pub stroke_color: HSV,
+	pub background_color: Srgb8,
+	pub stroke_color: Hsv,
 	pub stroke_radius: Vx,
 	pub view: Tracked<View>,
 	pub images: Vec<Tracked<Image>>,
@@ -282,7 +284,8 @@ impl Canvas {
 		}
 	}
 
-	pub fn from_file(file_path: PathBuf, background_color: SRGB8, stroke_color: SRGB8, stroke_radius: Vx, view: View, images: Vec<Tracked<Image>>, strokes: Vec<Tracked<Stroke>>, textures: Vec<Texture>) -> Self {
+	#[allow(clippy::too_many_arguments)]
+	pub fn from_file(file_path: PathBuf, background_color: Srgb8, stroke_color: Srgb8, stroke_radius: Vx, view: View, images: Vec<Tracked<Image>>, strokes: Vec<Tracked<Stroke>>, textures: Vec<Texture>) -> Self {
 		Self {
 			file_path: Some(file_path),
 			background_color,
