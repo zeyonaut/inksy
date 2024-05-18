@@ -90,7 +90,7 @@ pub struct LogicalContext {
 }
 
 impl LogicalContext {
-	const WTI_DEFSYSCTX: c_uint = 4; // Sets CXO_SYSTEM; see https://developer-docs.wacom.com/intuos-cintiq-business-tablets/docs/wintab-faqs for details
+	const WTI_DEFSYSCTX: c_uint = 4; // Sets CXO_SYSTEM; see https://web.archive.org/web/20211020024201/https://developer-docs.wacom.com/intuos-cintiq-business-tablets/docs/wintab-faqs for details
 
 	pub fn default_system() -> Option<Self> {
 		unsafe {
