@@ -59,11 +59,16 @@ pub enum TransientModeSwitch {
 pub struct ModeStack {
 	pub base_mode: Tool,
 	pub transient_mode: Option<Tool>,
+	pub discarded_transformation_draft: Tracked<()>,
 }
 
 impl ModeStack {
 	pub fn new(mode: Tool) -> Self {
-		Self { base_mode: mode, transient_mode: None }
+		Self {
+			base_mode: mode,
+			transient_mode: None,
+			discarded_transformation_draft: ().into(),
+		}
 	}
 
 	pub fn get(&self) -> &Tool {
@@ -117,31 +122,43 @@ impl ModeStack {
 
 	pub fn switch_select(&mut self) {
 		if !matches!(self.base_mode, Tool::Select { .. }) {
+			self.invalidate_base_transformation_draft();
 			self.base_mode = Tool::Select { origin: None }
 		}
 	}
 
 	pub fn switch_draw(&mut self) {
 		if !matches!(self.base_mode, Tool::Draw { .. }) {
+			self.invalidate_base_transformation_draft();
 			self.base_mode = Tool::Draw { current_stroke: None }
 		}
 	}
 
 	pub fn switch_move(&mut self) {
 		if !matches!(self.base_mode, Tool::Move { .. }) {
+			self.invalidate_base_transformation_draft();
 			self.base_mode = Tool::Move { origin: None }
 		}
 	}
 
 	pub fn switch_rotate(&mut self) {
 		if !matches!(self.base_mode, Tool::Rotate { .. }) {
+			self.invalidate_base_transformation_draft();
 			self.base_mode = Tool::Rotate { origin: None }
 		}
 	}
 
 	pub fn switch_resize(&mut self) {
 		if !matches!(self.base_mode, Tool::Resize { .. }) {
+			self.invalidate_base_transformation_draft();
 			self.base_mode = Tool::Resize { origin: None }
+		}
+	}
+
+	pub fn invalidate_base_transformation_draft(&mut self) {
+		match self.get() {
+			Tool::Move { .. } | Tool::Rotate { .. } | Tool::Resize { .. } => self.discarded_transformation_draft.invalidate(),
+			_ => {},
 		}
 	}
 
@@ -165,6 +182,7 @@ impl ModeStack {
 			Tool::Resize { origin } => *origin = None,
 			_ => {},
 		}
+		self.invalidate_base_transformation_draft();
 	}
 
 	pub fn current_stroke(&self) -> Option<&IncompleteStroke> {

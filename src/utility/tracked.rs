@@ -52,6 +52,12 @@ impl<T: Default> Default for Tracked<T> {
 	}
 }
 
+impl<T: Default> Tracked<T> {
+	pub fn reset_to_default(&mut self) {
+		*self = Self::default();
+	}
+}
+
 impl<T> AsRef<T> for Tracked<T> {
 	fn as_ref(&self) -> &T {
 		&self.value

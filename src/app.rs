@@ -233,6 +233,9 @@ impl<'window> App<'window> {
 			let cursor_virtual_position = (self.cursor_physical_position.s(self.scale).z(canvas.view.zoom) - semidimensions).rotate(canvas.view.tilt);
 
 			// TODO: Move this somwhere else; it's more related to input handling than rendering.
+			if self.mode_stack.discarded_transformation_draft.read_if_dirty().is_some() {
+				canvas.selection_transformation.reset_to_default();
+			}
 			match &self.mode_stack.base_mode {
 				Tool::Move { origin: Some(origin) } => {
 					*canvas.selection_transformation = SelectionTransformation {
