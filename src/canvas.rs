@@ -10,6 +10,7 @@ use std::{num::NonZeroU32, path::PathBuf};
 use crate::{
 	config::Config,
 	render::{stroke_renderer::SelectionTransformation, texture::Texture, Renderer},
+	ui::{SubTest, Test, TestId},
 	utility::{Hsv, Srgb8, Srgba8, Tracked, Vex, Vx, Vx2, Zero, Zoom},
 };
 
@@ -247,7 +248,7 @@ impl View {
 }
 
 pub struct Canvas {
-	pub file_path: Option<PathBuf>,
+	pub file_path: Tracked<Option<PathBuf>>,
 	pub background_color: Srgb8,
 	pub stroke_color: Hsv,
 	pub stroke_radius: Vx,
@@ -267,7 +268,7 @@ pub struct Canvas {
 impl Canvas {
 	pub fn new(config: &Config) -> Self {
 		Self {
-			file_path: None,
+			file_path: None.into(),
 			background_color: config.default_canvas_color,
 			stroke_color: config.default_stroke_color.to_hsv(),
 			stroke_radius: config.default_stroke_radius,
@@ -287,7 +288,7 @@ impl Canvas {
 	#[allow(clippy::too_many_arguments)]
 	pub fn from_file(file_path: PathBuf, background_color: Srgb8, stroke_color: Srgb8, stroke_radius: Vx, view: View, images: Vec<Tracked<Image>>, strokes: Vec<Tracked<Stroke>>, textures: Vec<Texture>) -> Self {
 		Self {
-			file_path: Some(file_path),
+			file_path: Some(file_path).into(),
 			background_color,
 			stroke_color: stroke_color.to_hsv(),
 			stroke_radius,

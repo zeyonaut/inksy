@@ -78,20 +78,22 @@ fn toggle_debug_mode(app: &mut App) {
 fn save_as_file(app: &mut App) {
 	if let Some(canvas) = app.current_canvas_index.and_then(|x| app.canvases.get_mut(x)) {
 		if let Some(file_path) = rfd::FileDialog::new().add_filter("Inksy", &["inksy"]).save_file() {
-			canvas.file_path = Some(file_path);
-			save_canvas_to_file(canvas, &app.renderer).expect("Failed to save canvas.");
-			canvas.set_retraction_count_at_save();
+			if save_canvas_to_file(canvas, &app.renderer, &file_path).is_some() {
+				canvas.file_path = Some(file_path).into();
+				canvas.set_retraction_count_at_save();
+			}
 		}
 	}
 }
 
 fn save_file(app: &mut App) {
 	if let Some(canvas) = app.current_canvas_index.and_then(|x| app.canvases.get_mut(x)) {
-		if canvas.file_path.is_none() {
-			save_as_file(app);
+		if let Some(file_path) = canvas.file_path.as_ref().as_ref() {
+			if save_canvas_to_file(canvas, &app.renderer, file_path).is_some() {
+				canvas.set_retraction_count_at_save();
+			}
 		} else {
-			save_canvas_to_file(canvas, &app.renderer).expect("Failed to save canvas.");
-			canvas.set_retraction_count_at_save();
+			save_as_file(app);
 		}
 	}
 }

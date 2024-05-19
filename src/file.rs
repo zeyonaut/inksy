@@ -7,7 +7,7 @@
 
 use std::{
 	fs::File,
-	io::{BufReader, BufWriter, Read, Write},
+	io::{BufReader, BufWriter, Cursor, Read, Write},
 	num::NonZero,
 	path::{Path, PathBuf},
 };
@@ -20,8 +20,7 @@ use crate::{
 
 const MAGIC_NUMBERS: [u8; 8] = [b'I', b'N', b'K', b'S', b'Y', 0, 0, 0];
 
-pub fn save_canvas_to_file(canvas: &Canvas, renderer: &Renderer) -> Option<()> {
-	let file_path = canvas.file_path.as_ref()?;
+pub fn save_canvas_to_file(canvas: &Canvas, renderer: &Renderer, file_path: &Path) -> Option<()> {
 	let old_file = if file_path.exists() {
 		let mut buffer = Vec::new();
 		let mut file = File::open(file_path).ok()?;
@@ -37,6 +36,7 @@ pub fn save_canvas_to_file(canvas: &Canvas, renderer: &Renderer) -> Option<()> {
 			// TODO: Return a descriptive error saying that we messed up. Badly.
 			file.write_all(&old_file).ok()?;
 		}
+		return None;
 	}
 
 	Some(())
@@ -46,7 +46,7 @@ fn save_canvas_to_file_inner(canvas: &Canvas, renderer: &Renderer, file_path: &P
 	let mut file = BufWriter::new(File::create(file_path).ok()?);
 
 	file.write_all(&MAGIC_NUMBERS).ok()?;
-	file.write_all(&0u64.to_le_bytes()).ok()?;
+	file.write_all(&1u64.to_le_bytes()).ok()?;
 
 	let background_color: [u8; 3] = canvas.background_color.0;
 	let stroke_color: [u8; 3] = canvas.stroke_color.to_srgb().to_srgb8().0;
@@ -114,16 +114,22 @@ fn save_canvas_to_file_inner(canvas: &Canvas, renderer: &Renderer, file_path: &P
 		file.write_all(&dimensions[1].to_le_bytes()).ok()?;
 	}
 
+	let mut data = vec![];
+	let mut compressed_data = vec![];
 	for ((texture_index, texture), is_texture_referenced) in canvas.textures.iter().enumerate().zip(is_texture_referenced_array) {
 		if is_texture_referenced {
-			let dimensions: [u32; 2] = [texture.extent.width, texture.extent.height];
+			compressed_data.clear();
+			data.reserve(texture.extent.width as usize * texture.extent.height as usize * 4);
+			data.clear();
 
-			file.write_all(&dimensions[0].to_le_bytes()).ok()?;
-			file.write_all(&dimensions[1].to_le_bytes()).ok()?;
+			// Set up the encoder.
+			let mut encoder = png::Encoder::new(&mut compressed_data, texture.extent.width, texture.extent.height);
+			encoder.set_color(png::ColorType::Rgba);
+			encoder.set_depth(png::BitDepth::Eight);
+			let mut writer = encoder.write_header().unwrap();
 
+			// Fetch and map texture from device.
 			let (buffer, bytes_per_row) = renderer.fetch_texture(canvas.textures.get(texture_index)?)?;
-
-			// Map the buffer before calling get_mapped_range.
 			let buffer_slice = buffer.slice(..);
 			let (tx, rx) = futures_intrusive::channel::shared::oneshot_channel();
 			buffer_slice.map_async(wgpu::MapMode::Read, move |result| {
@@ -132,17 +138,25 @@ fn save_canvas_to_file_inner(canvas: &Canvas, renderer: &Renderer, file_path: &P
 			renderer.device.poll(wgpu::Maintain::Wait);
 			pollster::block_on(rx.receive()).unwrap().unwrap();
 
-			// Write the texture row-by-row (each an initial slice of a mapped chunk).
+			// Read the texture row-by-row (each an initial slice of a mapped chunk).
 			for chunk in buffer.slice(..).get_mapped_range().chunks(bytes_per_row) {
-				file.write_all(&chunk[..texture.extent.width as usize * 4]).ok()?;
+				data.extend(&chunk[..texture.extent.width as usize * 4])
 			}
 
+			// Unmap the texture buffer.
 			buffer.unmap();
-		} else {
-			let dimensions: [u32; 2] = [0; 2];
+			
+			writer.write_image_data(&data).ok()?;
+			writer.finish().ok()?;
 
-			file.write_all(&dimensions[0].to_le_bytes()).ok()?;
-			file.write_all(&dimensions[1].to_le_bytes()).ok()?;
+			let texture_flag: u64 = compressed_data.len() as u64;
+			
+			file.write_all(&texture_flag.to_le_bytes()).ok()?;
+			file.write_all(&compressed_data).ok()?;
+		} else {
+			let texture_flag: u64 = 0;
+
+			file.write_all(&texture_flag.to_le_bytes()).ok()?;
 		}
 	}
 
@@ -159,7 +173,7 @@ pub fn load_canvas_from_file(renderer: &mut Renderer, file_path: PathBuf) -> Opt
 	}
 
 	let [discriminator] = read_u64s(&mut file)?;
-	if discriminator != 0 {
+	if !(discriminator == 0 || discriminator == 1) {
 		return None;
 	}
 
@@ -212,15 +226,43 @@ pub fn load_canvas_from_file(renderer: &mut Renderer, file_path: PathBuf) -> Opt
 	let mut revised_texture_index_array = Vec::with_capacity(texture_count as usize);
 	let mut revised_texture_index = 0;
 	let mut textures = Vec::with_capacity((texture_count as usize).min(128));
+	let mut compressed_data = vec![];
 	for _ in 0..texture_count {
 		revised_texture_index_array.push(revised_texture_index);
-		let [width, height] = read_u32s(&mut file)?;
-		// If either dimension are zero, no texture was saved.
-		if let [Ok(width), Ok(height)] = [width, height].map(NonZero::try_from) {
-			let mut buffer = vec![0; width.get() as usize * 4 * height.get() as usize];
-			file.read_exact(&mut buffer).ok()?;
-			textures.push(renderer.create_texture([width, height], buffer));
-			revised_texture_index += 1;
+		match discriminator {
+			0 => {
+				let [width, height] = read_u32s(&mut file)?;
+				// If either dimension are zero, no texture was saved.
+				if let [Ok(width), Ok(height)] = [width, height].map(NonZero::try_from) {
+					let mut buffer = vec![0; width.get() as usize * 4 * height.get() as usize];
+					file.read_exact(&mut buffer).ok()?;
+					textures.push(renderer.create_texture([width, height], buffer));
+					revised_texture_index += 1;
+				}
+			},
+			1 => {
+				let [texture_flag] = read_u64s(&mut file)?;
+				match texture_flag {
+					0 => {},
+					i => {
+						compressed_data.clear();
+						compressed_data.resize(i as usize, 0);
+						file.read_exact(&mut compressed_data).ok()?;
+
+						let png_decoder = png::Decoder::new(Cursor::new(&compressed_data));
+						let mut png_reader = png_decoder.read_info().ok()?;
+						let mut buffer = vec![0; png_reader.output_buffer_size()];
+						let width = png_reader.info().width;
+						let height = png_reader.info().height;
+						png_reader.next_frame(&mut buffer).ok()?;
+						png_reader.finish().ok()?;
+
+						textures.push(renderer.create_texture([NonZero::new(width)?, NonZero::new(height)?], buffer));
+						revised_texture_index += 1;
+					},
+				}
+			},
+			_ => return None,
 		}
 	}
 

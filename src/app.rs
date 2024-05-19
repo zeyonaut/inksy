@@ -684,7 +684,7 @@ impl<'window> App<'window> {
 			}
 
 			// TODO: Find a better way to handle this.
-			if self.was_canvas_saved != canvas.is_saved() {
+			if self.was_canvas_saved != canvas.is_saved() || canvas.file_path.read_if_dirty().is_some() {
 				self.was_canvas_saved = !self.was_canvas_saved;
 				self.update_window_title();
 			}
@@ -700,13 +700,13 @@ impl<'window> App<'window> {
 			if self.was_canvas_saved {
 				self.window.set_title(&format!(
 					"{} - {}",
-					canvas.file_path.as_ref().and_then(|file_path| file_path.file_stem()).and_then(|s| s.to_str()).unwrap_or("[Untitled]"),
+					canvas.file_path.as_ref().as_ref().and_then(|file_path| file_path.file_stem()).and_then(|s| s.to_str()).unwrap_or("[Untitled]"),
 					APP_NAME_CAPITALIZED
 				));
 			} else {
 				self.window.set_title(&format!(
 					"*{} - {}",
-					canvas.file_path.as_ref().and_then(|file_path| file_path.file_stem()).and_then(|s| s.to_str()).unwrap_or("[Untitled]"),
+					canvas.file_path.as_ref().as_ref().and_then(|file_path| file_path.file_stem()).and_then(|s| s.to_str()).unwrap_or("[Untitled]"),
 					APP_NAME_CAPITALIZED
 				));
 			}
