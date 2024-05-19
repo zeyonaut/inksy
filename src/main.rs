@@ -23,6 +23,7 @@ mod input;
 #[path = "render/_.rs"]
 mod render;
 mod tools;
+mod ui;
 #[path = "utility/_.rs"]
 mod utility;
 #[cfg(target_os = "windows")]

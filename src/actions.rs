@@ -72,11 +72,11 @@ pub fn discovery(on_press: fn(&mut App), on_release: fn(&mut App)) -> Action {
 // Actions:
 
 fn toggle_debug_mode(app: &mut App) {
-	app.is_debug_mode_on ^= true;
+	app.multicanvas.is_debug_mode_on ^= true;
 }
 
 fn save_as_file(app: &mut App) {
-	if let Some(canvas) = app.current_canvas_index.and_then(|x| app.canvases.get_mut(x)) {
+	if let Some(canvas) = app.multicanvas.current_canvas_mut() {
 		if let Some(file_path) = rfd::FileDialog::new().add_filter("Inksy", &["inksy"]).save_file() {
 			if save_canvas_to_file(canvas, &app.renderer, &file_path).is_some() {
 				canvas.file_path = Some(file_path).into();
@@ -87,7 +87,7 @@ fn save_as_file(app: &mut App) {
 }
 
 fn save_file(app: &mut App) {
-	if let Some(canvas) = app.current_canvas_index.and_then(|x| app.canvases.get_mut(x)) {
+	if let Some(canvas) = app.multicanvas.current_canvas_mut() {
 		if let Some(file_path) = canvas.file_path.as_ref().as_ref() {
 			if save_canvas_to_file(canvas, &app.renderer, file_path).is_some() {
 				canvas.set_retraction_count_at_save();
@@ -99,108 +99,108 @@ fn save_file(app: &mut App) {
 }
 
 fn load_from_file(app: &mut App) {
-	app.current_canvas_index.map(|current_canvas_index| app.canvases.get_mut(current_canvas_index).map(Canvas::invalidate));
+	app.multicanvas.current_canvas_index.map(|current_canvas_index| app.multicanvas.canvases.get_mut(current_canvas_index).map(Canvas::invalidate));
 	if let Some(file_path) = rfd::FileDialog::new().add_filter("Inksy", &["inksy"]).pick_file() {
 		if let Some(canvas) = load_canvas_from_file(&mut app.renderer, file_path) {
-			let new_canvas_index = app.current_canvas_index.map_or(0, |x| x + 1);
-			app.canvases.insert(new_canvas_index, canvas);
-			app.current_canvas_index = Some(new_canvas_index);
+			let new_canvas_index = app.multicanvas.current_canvas_index.map_or(0, |x| x + 1);
+			app.multicanvas.canvases.insert(new_canvas_index, canvas);
+			app.multicanvas.current_canvas_index = Some(new_canvas_index);
 		}
 	}
 	app.update_window_title();
 }
 
 fn new_file(app: &mut App) {
-	app.current_canvas_index.map(|current_canvas_index| app.canvases.get_mut(current_canvas_index).map(Canvas::invalidate));
-	let new_canvas_index = app.current_canvas_index.map_or(0, |x| x + 1);
-	app.canvases.insert(new_canvas_index, Canvas::new(&app.config));
-	app.current_canvas_index = Some(new_canvas_index);
+	app.multicanvas.current_canvas_index.map(|current_canvas_index| app.multicanvas.canvases.get_mut(current_canvas_index).map(Canvas::invalidate));
+	let new_canvas_index = app.multicanvas.current_canvas_index.map_or(0, |x| x + 1);
+	app.multicanvas.canvases.insert(new_canvas_index, Canvas::new(&app.config));
+	app.multicanvas.current_canvas_index = Some(new_canvas_index);
 	app.update_window_title();
 }
 
 fn close_tab(app: &mut App) {
-	if let Some(current_canvas_index) = app.current_canvas_index {
-		app.canvases.get_mut(current_canvas_index).map(Canvas::invalidate);
-		app.canvases.remove(current_canvas_index);
+	if let Some(current_canvas_index) = app.multicanvas.current_canvas_index {
+		app.multicanvas.canvases.get_mut(current_canvas_index).map(Canvas::invalidate);
+		app.multicanvas.canvases.remove(current_canvas_index);
 		if current_canvas_index > 0 {
-			app.current_canvas_index = Some(current_canvas_index - 1);
-		} else if app.canvases.is_empty() {
-			app.current_canvas_index = None;
+			app.multicanvas.current_canvas_index = Some(current_canvas_index - 1);
+		} else if app.multicanvas.canvases.is_empty() {
+			app.multicanvas.current_canvas_index = None;
 		}
 	}
 	app.update_window_title();
 }
 
 fn switch_tab_left(app: &mut App) {
-	if let Some(current_canvas_index) = app.current_canvas_index {
-		app.canvases.get_mut(current_canvas_index).map(Canvas::invalidate);
-		if !app.canvases.is_empty() {
-			app.current_canvas_index = Some(current_canvas_index.checked_sub(1).unwrap_or(app.canvases.len() - 1));
+	if let Some(current_canvas_index) = app.multicanvas.current_canvas_index {
+		app.multicanvas.canvases.get_mut(current_canvas_index).map(Canvas::invalidate);
+		if !app.multicanvas.canvases.is_empty() {
+			app.multicanvas.current_canvas_index = Some(current_canvas_index.checked_sub(1).unwrap_or(app.multicanvas.canvases.len() - 1));
 		}
 	}
 	app.update_window_title();
 }
 
 fn switch_tab_right(app: &mut App) {
-	if let Some(current_canvas_index) = app.current_canvas_index {
-		app.canvases.get_mut(current_canvas_index).map(Canvas::invalidate);
-		if !app.canvases.is_empty() {
-			app.current_canvas_index = Some((current_canvas_index + 1) % app.canvases.len());
+	if let Some(current_canvas_index) = app.multicanvas.current_canvas_index {
+		app.multicanvas.canvases.get_mut(current_canvas_index).map(Canvas::invalidate);
+		if !app.multicanvas.canvases.is_empty() {
+			app.multicanvas.current_canvas_index = Some((current_canvas_index + 1) % app.multicanvas.canvases.len());
 		}
 	}
 	app.update_window_title();
 }
 
 fn discard_draft(app: &mut App) {
-	app.mode_stack.discard_draft();
+	app.multicanvas.mode_stack.discard_draft();
 }
 
 fn choose_draw_tool(app: &mut App) {
-	app.mode_stack.switch_draw();
+	app.multicanvas.mode_stack.switch_draw();
 }
 
 fn choose_select_tool(app: &mut App) {
-	app.mode_stack.switch_select();
+	app.multicanvas.mode_stack.switch_select();
 }
 
 fn choose_move_tool(app: &mut App) {
-	app.mode_stack.switch_move();
+	app.multicanvas.mode_stack.switch_move();
 }
 
 fn choose_rotate_tool(app: &mut App) {
-	app.mode_stack.switch_rotate();
+	app.multicanvas.mode_stack.switch_rotate();
 }
 
 fn choose_resize_tool(app: &mut App) {
-	app.mode_stack.switch_resize();
+	app.multicanvas.mode_stack.switch_resize();
 }
 
 fn hold_pan_tool(app: &mut App) {
-	app.mode_stack.switch_transient(TransientModeSwitch::Pan { should_pan: true });
+	app.multicanvas.mode_stack.switch_transient(TransientModeSwitch::Pan { should_pan: true });
 }
 
 fn release_pan_tool(app: &mut App) {
-	app.mode_stack.switch_transient(TransientModeSwitch::Pan { should_pan: false });
+	app.multicanvas.mode_stack.switch_transient(TransientModeSwitch::Pan { should_pan: false });
 }
 
 fn hold_zoom_tool(app: &mut App) {
-	app.mode_stack.switch_transient(TransientModeSwitch::Zoom { should_zoom: true });
+	app.multicanvas.mode_stack.switch_transient(TransientModeSwitch::Zoom { should_zoom: true });
 }
 
 fn release_zoom_tool(app: &mut App) {
-	app.mode_stack.switch_transient(TransientModeSwitch::Zoom { should_zoom: false });
+	app.multicanvas.mode_stack.switch_transient(TransientModeSwitch::Zoom { should_zoom: false });
 }
 
 fn hold_orbit_tool(app: &mut App) {
-	app.mode_stack.switch_transient(TransientModeSwitch::Orbit { should_orbit: true });
+	app.multicanvas.mode_stack.switch_transient(TransientModeSwitch::Orbit { should_orbit: true });
 }
 
 fn release_orbit_tool(app: &mut App) {
-	app.mode_stack.switch_transient(TransientModeSwitch::Orbit { should_orbit: false });
+	app.multicanvas.mode_stack.switch_transient(TransientModeSwitch::Orbit { should_orbit: false });
 }
 
 fn hold_color_picker_tool(app: &mut App) {
-	app.mode_stack.switch_transient(TransientModeSwitch::Color {
+	app.multicanvas.mode_stack.switch_transient(TransientModeSwitch::Color {
 		center: Some(if app.is_cursor_relevant {
 			app.cursor_physical_position
 		} else {
@@ -210,11 +210,11 @@ fn hold_color_picker_tool(app: &mut App) {
 }
 
 fn release_color_picker_tool(app: &mut App) {
-	app.mode_stack.switch_transient(TransientModeSwitch::Color { center: None });
+	app.multicanvas.mode_stack.switch_transient(TransientModeSwitch::Color { center: None });
 }
 
 fn delete_selected_items(app: &mut App) {
-	if let Some(canvas) = app.current_canvas_index.and_then(|x| app.canvases.get_mut(x)) {
+	if let Some(canvas) = app.multicanvas.current_canvas_mut() {
 		let selected_image_indices = canvas.images().iter().enumerate().filter_map(|(index, image)| if image.is_selected { Some(index) } else { None }).collect::<Vec<_>>();
 
 		let selected_stroke_indices = canvas.strokes().iter().enumerate().filter_map(|(index, stroke)| if stroke.is_selected { Some(index) } else { None }).collect::<Vec<_>>();
@@ -259,23 +259,23 @@ fn toggle_maximized(app: &mut App) {
 }
 
 fn undo(app: &mut App) {
-	if app.mode_stack.is_drafting() {
-		app.mode_stack.discard_draft();
-	} else if let Some(canvas) = app.current_canvas_index.and_then(|x| app.canvases.get_mut(x)) {
+	if app.multicanvas.mode_stack.is_drafting() {
+		app.multicanvas.mode_stack.discard_draft();
+	} else if let Some(canvas) = app.multicanvas.current_canvas_mut() {
 		canvas.undo();
 	}
 }
 
 fn redo(app: &mut App) {
-	if app.mode_stack.is_drafting() {
-		app.mode_stack.discard_draft();
-	} else if let Some(canvas) = app.current_canvas_index.and_then(|x| app.canvases.get_mut(x)) {
+	if app.multicanvas.mode_stack.is_drafting() {
+		app.multicanvas.mode_stack.discard_draft();
+	} else if let Some(canvas) = app.multicanvas.current_canvas_mut() {
 		canvas.redo();
 	}
 }
 
 fn cut(app: &mut App) {
-	if let Some(canvas) = app.current_canvas_index.and_then(|x| app.canvases.get_mut(x)) {
+	if let Some(canvas) = app.multicanvas.current_canvas_mut() {
 		let semidimensions = Vex([app.renderer.config.width as f32 / 2., app.renderer.config.height as f32 / 2.].map(Px)).s(app.scale).z(canvas.view.zoom);
 		let cursor_virtual_position = (app.cursor_physical_position.s(app.scale).z(canvas.view.zoom) - semidimensions).rotate(-canvas.view.tilt);
 		let offset = cursor_virtual_position + canvas.view.position;
@@ -331,7 +331,7 @@ fn cut(app: &mut App) {
 }
 
 fn copy(app: &mut App) {
-	if let Some(canvas) = app.current_canvas_index.and_then(|x| app.canvases.get(x)) {
+	if let Some(canvas) = app.multicanvas.current_canvas_index.and_then(|x| app.multicanvas.canvases.get(x)) {
 		let semidimensions = Vex([app.renderer.config.width as f32 / 2., app.renderer.config.height as f32 / 2.].map(Px)).s(app.scale).z(canvas.view.zoom);
 		let cursor_virtual_position = (app.cursor_physical_position.s(app.scale).z(canvas.view.zoom) - semidimensions).rotate(-canvas.view.tilt);
 		let offset = cursor_virtual_position + canvas.view.position;
@@ -372,7 +372,7 @@ fn copy(app: &mut App) {
 }
 
 fn paste(app: &mut App) {
-	if let Some(canvas) = app.current_canvas_index.and_then(|x| app.canvases.get_mut(x)) {
+	if let Some(canvas) = app.multicanvas.current_canvas_mut() {
 		match app.clipboard.read() {
 			Some(ClipboardData::Custom) => {
 				if let Some(ClipboardContents::Subcanvas(images, strokes)) = app.clipboard_contents.as_ref() {
@@ -440,19 +440,19 @@ fn paste(app: &mut App) {
 }
 
 fn select_all(app: &mut App) {
-	if let Some(canvas) = app.current_canvas_index.and_then(|x| app.canvases.get_mut(x)) {
+	if let Some(canvas) = app.multicanvas.current_canvas_mut() {
 		canvas.select_all(true);
 	}
 }
 
 fn select_none(app: &mut App) {
-	if let Some(canvas) = app.current_canvas_index.and_then(|x| app.canvases.get_mut(x)) {
+	if let Some(canvas) = app.multicanvas.current_canvas_mut() {
 		canvas.select_all(false);
 	}
 }
 
 fn recolor_selection(app: &mut App) {
-	if let Some(canvas) = app.current_canvas_index.and_then(|x| app.canvases.get_mut(x)) {
+	if let Some(canvas) = app.multicanvas.current_canvas_mut() {
 		let selected_indices = canvas.strokes().iter().enumerate().filter_map(|(index, stroke)| if stroke.is_selected { Some(index) } else { None }).collect::<Vec<_>>();
 
 		if !selected_indices.is_empty() {

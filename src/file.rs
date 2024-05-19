@@ -145,12 +145,12 @@ fn save_canvas_to_file_inner(canvas: &Canvas, renderer: &Renderer, file_path: &P
 
 			// Unmap the texture buffer.
 			buffer.unmap();
-			
+
 			writer.write_image_data(&data).ok()?;
 			writer.finish().ok()?;
 
 			let texture_flag: u64 = compressed_data.len() as u64;
-			
+
 			file.write_all(&texture_flag.to_le_bytes()).ok()?;
 			file.write_all(&compressed_data).ok()?;
 		} else {

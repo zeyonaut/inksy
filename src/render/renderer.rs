@@ -103,22 +103,22 @@ pub struct Renderer<'window> {
 	// Rendering machinery.
 	surface: wgpu::Surface<'window>,
 	pub device: wgpu::Device,
-	queue: wgpu::Queue,
+	pub queue: wgpu::Queue,
 	// Properties.
 	pub config: wgpu::SurfaceConfiguration,
 	surface_format: wgpu::TextureFormat,
 	pub scale_factor: f32,
 	pub is_pending_resize: bool,
 	// Text rendering.
-	text_renderer: TextRenderer,
-	info_text: TextInstance,
+	pub text_renderer: TextRenderer,
+	pub info_text: TextInstance,
 	// Other renderers.
-	canvas_renderer: CanvasRenderer,
-	card_renderer: InstanceRenderer<CardInstance>,
-	color_ring_renderer: InstanceRenderer<ColorRingInstance>,
-	color_trigon_renderer: InstanceRenderer<ColorTrigonInstance>,
+	pub canvas_renderer: CanvasRenderer,
+	pub card_renderer: InstanceRenderer<CardInstance>,
+	pub color_ring_renderer: InstanceRenderer<ColorRingInstance>,
+	pub color_trigon_renderer: InstanceRenderer<ColorTrigonInstance>,
 	// Other resource handles.
-	viewport_buffer: UniformBuffer<ViewportUniform>,
+	pub viewport_buffer: UniformBuffer<ViewportUniform>,
 	texture_bind_group_layout: wgpu::BindGroupLayout,
 	multisample_texture: Option<wgpu::Texture>,
 }
@@ -272,11 +272,27 @@ impl<'window> Renderer<'window> {
 			self.info_text.position = Vex([width as f32 / 2., height as f32 / 2.].map(Px));
 		}
 	}
+}
 
-	pub fn update(&mut self) {}
+pub struct Prerender<'a> {
+	pub canvas: Option<&'a mut Canvas>,
+	pub current_stroke: Option<&'a IncompleteStroke>,
+	pub draw_commands: Vec<DrawCommand<'a>>,
+}
 
-	pub fn render(&mut self, config: &Config, mut canvas: Option<&mut Canvas>, current_stroke: Option<&IncompleteStroke>, draw_commands: Vec<DrawCommand>) -> Result<(), wgpu::SurfaceError> {
-		if let Some(canvas) = canvas.as_mut() {
+impl<'a> Prerender<'a> {
+	pub fn new() -> Self {
+		Self {
+			canvas: None,
+			current_stroke: None,
+			draw_commands: Vec::new(),
+		}
+	}
+}
+
+impl<'window> Renderer<'window> {
+	pub fn render(&mut self, config: &Config, mut prerender: Prerender) -> Result<(), wgpu::SurfaceError> {
+		if let Some(canvas) = prerender.canvas.as_mut() {
 			if let Some(view) = canvas.view.read_if_with_is_dirty(|is_dirty| is_dirty || self.is_pending_resize) {
 				// We write the new size to the viewport buffer.
 				self.viewport_buffer.write(
@@ -296,11 +312,11 @@ impl<'window> Renderer<'window> {
 			}
 		}
 
-		let canvas_render_key = canvas.as_mut().map(|canvas| self.canvas_renderer.prepare(&self.device, &self.queue, canvas, current_stroke));
+		let canvas_render_key = prerender.canvas.as_mut().map(|canvas| self.canvas_renderer.prepare(&self.device, &self.queue, canvas, prerender.current_stroke));
 
 		// We compute the background color of the canvas.
 		let background_color = {
-			let [r, g, b, a] = canvas.as_ref().map_or(config.default_canvas_color, |canvas| canvas.background_color).opaque().to_lrgba().0.map(|x| x as f64);
+			let [r, g, b, a] = prerender.canvas.as_ref().map_or(config.default_canvas_color, |canvas| canvas.background_color).opaque().to_lrgba().0.map(|x| x as f64);
 			wgpu::Color { r, g, b, a }
 		};
 
@@ -311,7 +327,7 @@ impl<'window> Renderer<'window> {
 
 		let mut render_commands: Vec<RenderCommand> = vec![];
 
-		for draw_command in draw_commands {
+		for draw_command in prerender.draw_commands {
 			match draw_command {
 				DrawCommand::Text { text, align, position, anchors } => text_instances.push(TextInstance::new(&mut self.text_renderer, &text, 13., 1.25, align, position, anchors)),
 				DrawCommand::Card { position, dimensions, color, radius } => {
@@ -352,7 +368,7 @@ impl<'window> Renderer<'window> {
 		}
 
 		// Prepare text.
-		let should_render_info_text = canvas.is_none();
+		let should_render_info_text = prerender.canvas.is_none();
 		self.text_renderer.prepare(
 			&self.device,
 			&self.queue,
@@ -395,7 +411,7 @@ impl<'window> Renderer<'window> {
 
 		self.viewport_buffer.activate(&mut render_pass, 0);
 
-		if let (Some(canvas), Some(canvas_render_key)) = (canvas, canvas_render_key) {
+		if let (Some(canvas), Some(canvas_render_key)) = (prerender.canvas, canvas_render_key) {
 			self.canvas_renderer.render(&mut render_pass, &canvas.textures, canvas_render_key);
 		}
 
